@@ -52,6 +52,7 @@ import { Badge }  from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Modal }  from '@/components/ui/Modal';
 import { toast }  from '@/components/ui/Toast';
+import { adminQuotationApi } from '@/lib/quotation-api';
 import type { AdminRFQRow } from './AdminRFQs';
 
 // ─── Quotation status ─────────────────────────────────────────────────────────
@@ -582,12 +583,12 @@ export function AdminQuotationBuilder({ rfq, onBack }: AdminQuotationBuilderProp
   const [previewOpen, setPreview]   = React.useState(false);
   const [isSaving, setSaving]       = React.useState(false);
   const [isSending, setSending]     = React.useState(false);
+  // Tracks the persisted DB quotation so Save Draft → Send reuses the same record
+  const [savedQuotId, setSavedQuotId] = React.useState<number | null>(null);
+  const [realQuotNumber, setRealQuotNumber] = React.useState<string>('');
 
-  // Quotation number (stable per rfq)
-  const quotNumber = React.useMemo(
-    () => `QT-${rfq.rfqNumber.replace('RFQ-', '')}`,
-    [rfq.rfqNumber],
-  );
+  // Fallback display number before the quotation is saved
+  const quotNumber = realQuotNumber || `QT-${rfq.rfqNumber.replace('RFQ-', '')}`;
 
   const totals = React.useMemo(() => calcTotals(form), [form]);
 
@@ -596,12 +597,65 @@ export function AdminQuotationBuilder({ rfq, onBack }: AdminQuotationBuilderProp
 
   // ── Actions ──────────────────────────────────────────────────────────────────
 
+  // Builds the payload accepted by QuotationCreateSerializer
+  const buildPayload = () => ({
+    rfq:               parseInt(rfq.id, 10),
+    product_name:      form.productName,
+    product_type:      form.productType,
+    quantity:          form.quantity,
+    unit_price:        form.unitPrice        || '0',
+    discount_pct:      form.discountPct      || '0',
+    tax_pct:           form.taxPct           || '0',
+    shipping_charge:   form.shippingCharge   || '0',
+    delivery_location: form.deliveryLocation,
+    expected_delivery: form.expectedDelivery || undefined,
+    valid_until:       form.validUntil       || undefined,
+    available_qty:     form.availableQty,
+    reserved_qty:      form.reservedQty,
+    incoming_qty:      form.incomingQty,
+    eta:               form.eta              || undefined,
+    terms_notes:       form.termsNotes,
+  });
+
+  // Creates or updates the quotation record and returns its DB id
+  const persistQuotation = async (): Promise<number> => {
+    const payload = buildPayload();
+    if (savedQuotId) {
+      // Already saved — patch only (don't re-create to avoid unique RFQ constraint error)
+      const updated = await adminQuotationApi.updateQuotation(savedQuotId, payload);
+      return updated.id;
+    }
+    const created = await adminQuotationApi.createQuotation(payload);
+    setSavedQuotId(created.id);
+    setRealQuotNumber(created.quotation_number);
+    // Add the single line item for the header-level product
+    try {
+      await adminQuotationApi.addItem(created.id, {
+        product_name:     form.productName,
+        quantity:         form.quantity,
+        unit_price:       form.unitPrice    || '0',
+        discount_pct:     form.discountPct  || '0',
+        tax_pct:          form.taxPct       || '0',
+        availability_qty: form.availableQty,
+      });
+    } catch {
+      // Item creation failing is non-critical — quotation header is already saved
+    }
+    return created.id;
+  };
+
   const handleSaveDraft = async () => {
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 700));
-    setSaving(false);
-    setStatus('draft');
-    toast.success(`Quotation ${quotNumber} saved as draft`);
+    try {
+      const quotId = await persistQuotation();
+      setStatus('draft');
+      toast.success(`Quotation ${realQuotNumber || quotNumber} saved as draft (id: ${quotId})`);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save draft quotation');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSend = async () => {
@@ -614,10 +668,17 @@ export function AdminQuotationBuilder({ rfq, onBack }: AdminQuotationBuilderProp
       return;
     }
     setSending(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setSending(false);
-    setStatus('sent');
-    toast.success(`Quotation ${quotNumber} sent to ${form.customerEmail}`);
+    try {
+      const quotId = await persistQuotation();
+      await adminQuotationApi.sendQuotation(quotId);
+      setStatus('sent');
+      toast.success(`Quotation ${realQuotNumber || quotNumber} sent to ${form.customerEmail}`);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to send quotation');
+    } finally {
+      setSending(false);
+    }
   };
 
   const statusCfg  = QUOT_STATUS_CONFIG[status];

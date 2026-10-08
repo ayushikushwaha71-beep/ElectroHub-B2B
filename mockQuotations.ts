@@ -8,6 +8,7 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type MockQuotationStatus =
+  | 'draft'
   | 'sent'              // admin sent, not yet viewed
   | 'viewed'            // customer opened it
   | 'negotiating'       // customer submitted a counter-offer
@@ -15,6 +16,7 @@ export type MockQuotationStatus =
   | 'accepted'          // customer accepted
   | 'rejected'          // customer rejected
   | 'invoice_sent'      // admin issued GST invoice, awaiting payment
+  | 'partially_paid'
   | 'payment_confirmed'; // customer confirmed payment / admin marked as paid
 
 export interface MockNegotiationEntry {
@@ -60,6 +62,13 @@ export interface MockQuotation {
   status:         MockQuotationStatus;
   sentAt:         string;    // ISO
   updatedAt:      string;    // ISO
+
+  // Real backend fields for payment
+  grandTotal?:    number;
+  paidAmount?:    number;
+  pendingAmount?: number;
+  invoiceNumber?: string;
+  dueDate?:       string;
 
   // Negotiation
   negotiations:   MockNegotiationEntry[];

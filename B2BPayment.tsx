@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   ClipboardCopy,
   CreditCard,
+  Download,
   ExternalLink,
   Hash,
   IndianRupee,
@@ -43,7 +44,8 @@ import { Button } from '@/components/ui/Button';
 import { Input }  from '@/components/ui/Input';
 import { Modal }  from '@/components/ui/Modal';
 import { toast }  from '@/components/ui/Toast';
-import type { MockQuotation } from './mockQuotations';
+import { Quotation } from '@/lib/quotation-api';
+import { InvoiceDocument } from './AdminInvoice';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -72,36 +74,48 @@ interface InvoiceDetails {
   sgst:          number;
   igst:          number;
   isIntraState:  boolean;
-  grandTotal:    number;
+  grand_total:    number;
+  paidAmount:    number;
+  pendingAmount: number;
+  status?:       string;
+  buyerGstin?:   string;
+  paidAt?:       string;
+  utrReference?: string;
 }
 
-function deriveInvoiceDetails(q: MockQuotation): InvoiceDetails {
-  const sub      = q.quantity * q.unitPrice;
-  const disc     = sub * (q.discountPct / 100);
+function deriveInvoiceDetails(q: Quotation): InvoiceDetails {
+  const sub      = q.quantity * Number(q.unit_price);
+  const disc     = sub * (Number(q.discount_pct) / 100);
   const taxable  = sub - disc;
-  const taxTotal = taxable * (q.taxPct / 100);
+  const taxTotal = taxable * (Number(q.tax_pct) / 100);
   // Default to intra-state (Karnataka seller) unless location is outside Karnataka
-  const isIntra  = !q.deliveryLocation.toLowerCase().includes('delhi') &&
-                   !q.deliveryLocation.toLowerCase().includes('maharashtra') &&
-                   !q.deliveryLocation.toLowerCase().includes('telangana') &&
-                   !q.deliveryLocation.toLowerCase().includes('punjab');
+  const isIntra  = !q.delivery_location.toLowerCase().includes('delhi') &&
+                   !q.delivery_location.toLowerCase().includes('maharashtra') &&
+                   !q.delivery_location.toLowerCase().includes('telangana') &&
+                   !q.delivery_location.toLowerCase().includes('punjab');
   const cgst     = isIntra ? taxTotal / 2 : 0;
   const sgst     = isIntra ? taxTotal / 2 : 0;
   const igst     = isIntra ? 0 : taxTotal;
-  const grand    = taxable + taxTotal + q.shippingCharge;
+  const grand    = taxable + taxTotal + Number(q.shipping_charge);
 
-  // Due date = 15 days from updatedAt (invoice sent date)
-  const dueDate  = new Date(new Date(q.updatedAt).getTime() + 15 * 86400000).toISOString().split('T')[0];
+  // Due date = 15 days from updated_at (invoice sent date)
+  const dueDate  = new Date(new Date(q.updated_at).getTime() + 15 * 86400000).toISOString().split('T')[0];
 
   return {
-    invoiceNumber: `INV-${q.quotationNumber.replace('QT-', '')}`,
-    dueDate,
+    invoiceNumber: q.invoice?.invoice_number || `INV-${q.quotation_number.replace('QT-', '')}`,
+    dueDate: q.invoice?.due_date || dueDate,
     taxable,
     cgst,
     sgst,
     igst,
     isIntraState: isIntra,
-    grandTotal: grand,
+    grand_total: q.grand_total ?? grand,
+    paidAmount: q.paid_amount ?? 0,
+    pendingAmount: q.pending_amount ?? (q.grand_total ?? grand),
+    status: (q.invoice as any)?.status || (q.status === 'payment_confirmed' ? 'paid' : 'sent'),
+    buyerGstin: (q.invoice as any)?.buyer_gstin || (q.rfq as any)?.customer?.vendor_profile?.gstin || '',
+    paidAt: (q.invoice as any)?.paid_at || (q.status === 'payment_confirmed' ? q.updated_at : undefined),
+    utrReference: (q.invoice as any)?.utr_reference || (q as any).utr_reference || '',
   };
 }
 
@@ -177,18 +191,29 @@ function MarkPaidModal({
   open:      boolean;
   onClose:   () => void;
   invoice:   InvoiceDetails;
-  onConfirm: (utr: string) => void;
+  onConfirm: (amount: number, utr: string) => void;
 }) {
-  const [utr, setUtr]   = React.useState('');
-  const [busy, setBusy] = React.useState(false);
+  const [utr, setUtr]       = React.useState('');
+  const [amount, setAmount] = React.useState(String(invoice.pendingAmount));
+  const [busy, setBusy]     = React.useState(false);
 
-  React.useEffect(() => { if (open) setUtr(''); }, [open]);
+  React.useEffect(() => { 
+    if (open) {
+      setUtr('');
+      setAmount(String(invoice.pendingAmount));
+    }
+  }, [open, invoice.pendingAmount]);
 
   const handleSubmit = async () => {
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      toast.error('Please enter a valid amount');
+      return;
+    }
     setBusy(true);
     await new Promise((r) => setTimeout(r, 900));
     setBusy(false);
-    onConfirm(utr.trim());
+    onConfirm(numAmount, utr.trim());
     onClose();
   };
 
@@ -199,7 +224,7 @@ function MarkPaidModal({
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/5">
           <IndianRupee size={18} className="text-[var(--primary)] shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-[var(--text)]">Amount Due: {fmtINR(invoice.grandTotal)}</p>
+            <p className="text-sm font-semibold text-[var(--text)]">Amount Due: {fmtINR(invoice.grand_total)}</p>
             <p className="text-xs text-[var(--text-muted)]">{invoice.invoiceNumber} · Due {fmtDate(invoice.dueDate)}</p>
           </div>
         </div>
@@ -207,6 +232,23 @@ function MarkPaidModal({
         <p className="text-sm text-[var(--text-muted)]">
           After initiating your payment via NEFT/RTGS/UPI, enter your transaction reference number below and click submit. Our team will verify and confirm your order.
         </p>
+
+        <div>
+          <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
+            Amount Paying Now
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]">₹</span>
+            <Input
+              id="b2b-amount-input"
+              type="number"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="pl-7"
+            />
+          </div>
+        </div>
 
         <div>
           <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
@@ -251,8 +293,8 @@ function MarkPaidModal({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface B2BPaymentProps {
-  quotation:          MockQuotation;
-  onPaymentSubmit:    (utr: string) => void;
+  quotation:          Quotation;
+  onPaymentSubmit:    (amount: number, utr: string) => void;
   onNavigateToOrders?: () => void;
 }
 
@@ -262,14 +304,15 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
 
   const invoice = deriveInvoiceDetails(quotation);
   const isPaid  = quotation.status === 'payment_confirmed';
+  const isPartiallyPaid = false;
 
   const handlePayLink = () => {
     setPayLink(true);
     toast.info('Payment gateway link would open here (demo mode)');
   };
 
-  const handleConfirm = (utr: string) => {
-    onPaymentSubmit(utr);
+  const handleConfirm = (amount: number, utr: string) => {
+    onPaymentSubmit(amount, utr);
     toast.success('Payment confirmation submitted! Our team will verify shortly.');
   };
 
@@ -291,14 +334,19 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
             <p className="text-sm text-[var(--text-muted)] mt-0.5">
               Your payment for invoice <strong>{invoice.invoiceNumber}</strong> has been confirmed. Our team will dispatch your goods shortly.
             </p>
-            <p className="text-xs text-[var(--text-subtle)] mt-1">Updated {fmtDateTime(quotation.updatedAt)}</p>
+            <p className="text-xs text-[var(--text-subtle)] mt-1">Updated {fmtDateTime(quotation.updated_at)}</p>
           </div>
-          <Badge variant="success" size="sm" icon={<CheckCircle2 size={11} />}>Paid</Badge>
+          <div className="flex flex-col items-end gap-2">
+            <Badge variant="success" size="sm" icon={<CheckCircle2 size={11} />}>Paid</Badge>
+            <Button size="sm" variant="outline" className="bg-white/50 border-[var(--success)]/25 text-[var(--success)] hover:bg-[var(--success)]/10" onClick={() => window.print()}>
+              <Download size={14} className="mr-1.5" /> Download PDF
+            </Button>
+          </div>
         </div>
       )}
 
       {/* ── Awaiting Payment Banner ── */}
-      {!isPaid && (
+      {(!isPaid && !isPartiallyPaid) && (
         <div className="flex items-start gap-4 px-5 py-4 rounded-2xl border border-blue-500/30 bg-blue-500/5">
           <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
             <Receipt size={20} className="text-blue-500" />
@@ -310,7 +358,29 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
               <strong className="text-[var(--text)]">{fmtDate(invoice.dueDate)}</strong>.
             </p>
           </div>
-          <Badge variant="info" size="sm" icon={<Send size={11} />}>Invoice Sent</Badge>
+          <div className="flex flex-col items-end gap-2">
+            <Badge variant="info" size="sm" icon={<Send size={11} />}>Invoice Sent</Badge>
+            <Button size="sm" variant="outline" className="bg-white/50 border-blue-500/20 text-blue-600 hover:bg-blue-500/10" onClick={() => window.print()}>
+              <Download size={14} className="mr-1.5" /> Download PDF
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Partially Paid Banner ── */}
+      {isPartiallyPaid && (
+        <div className="flex items-start gap-4 px-5 py-4 rounded-2xl border border-amber-500/30 bg-amber-500/5">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
+            <Wallet size={20} className="text-amber-500" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-[var(--text)]">Partially Paid</p>
+            <p className="text-sm text-[var(--text-muted)] mt-0.5">
+              We have received partial payment of <strong>{fmtINR(invoice.paidAmount)}</strong>. Please pay the remaining balance of{' '}
+              <strong className="text-[var(--text)]">{fmtINR(invoice.pendingAmount)}</strong>.
+            </p>
+          </div>
+          <Badge variant="warning" size="sm" icon={<CheckCircle2 size={11} />}>Partial</Badge>
         </div>
       )}
 
@@ -321,30 +391,30 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
           {/* Invoice Summary */}
           <SectionCard icon={Receipt} title="Invoice Summary">
             <DataRow label="Invoice #"><span className="font-mono">{invoice.invoiceNumber}</span></DataRow>
-            <DataRow label="Quotation #"><span className="font-mono">{quotation.quotationNumber}</span></DataRow>
+            <DataRow label="Quotation #"><span className="font-mono">{quotation.quotation_number}</span></DataRow>
             <DataRow label="Product">
-              <span className="leading-snug">{quotation.productName}</span>
+              <span className="leading-snug">{quotation.product_name}</span>
             </DataRow>
             <DataRow label="Quantity">
-              <span>{quotation.quantity.toLocaleString('en-IN')} units @ {fmtINR(quotation.unitPrice)}</span>
+              <span>{quotation.quantity.toLocaleString('en-IN')} units @ {fmtINR(Number(quotation.unit_price))}</span>
             </DataRow>
             <DataRow label="Taxable Amt"><span className="tabular-nums">{fmtINR(invoice.taxable)}</span></DataRow>
             {invoice.isIntraState ? (
               <>
-                <DataRow label={`CGST (${quotation.taxPct/2}%)`}>
+                <DataRow label={`CGST (${Number(quotation.tax_pct)/2}%)`}>
                   <span className="tabular-nums text-[var(--text-muted)]">{fmtINR(invoice.cgst)}</span>
                 </DataRow>
-                <DataRow label={`SGST (${quotation.taxPct/2}%)`}>
+                <DataRow label={`SGST (${Number(quotation.tax_pct)/2}%)`}>
                   <span className="tabular-nums text-[var(--text-muted)]">{fmtINR(invoice.sgst)}</span>
                 </DataRow>
               </>
             ) : (
-              <DataRow label={`IGST (${quotation.taxPct}%)`}>
+              <DataRow label={`IGST (${quotation.tax_pct}%)`}>
                 <span className="tabular-nums text-[var(--text-muted)]">{fmtINR(invoice.igst)}</span>
               </DataRow>
             )}
-            {quotation.shippingCharge > 0 && (
-              <DataRow label="Shipping"><span className="tabular-nums">{fmtINR(quotation.shippingCharge)}</span></DataRow>
+            {Number(quotation.shipping_charge) > 0 && (
+              <DataRow label="Shipping"><span className="tabular-nums">{fmtINR(Number(quotation.shipping_charge))}</span></DataRow>
             )}
             <DataRow label="Due Date">
               <span className={cn(
@@ -358,8 +428,14 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
             {/* Grand Total */}
             <div className="mt-3 pt-3 border-t border-[var(--border)] flex justify-between items-center">
               <span className="font-bold text-[var(--text)]">Total Amount Due</span>
-              <span className="font-bold text-[var(--primary)] text-lg tabular-nums">{fmtINR(invoice.grandTotal)}</span>
+              <span className="font-bold text-[var(--primary)] text-lg tabular-nums">{fmtINR(invoice.grand_total)}</span>
             </div>
+            {isPartiallyPaid && (
+              <div className="mt-2 pt-2 border-t border-[var(--border)] flex justify-between items-center">
+                <span className="font-semibold text-[var(--text)]">Remaining Balance</span>
+                <span className="font-bold text-amber-500 text-lg tabular-nums">{fmtINR(invoice.pendingAmount)}</span>
+              </div>
+            )}
           </SectionCard>
 
           {/* Bank / Transfer Details */}
@@ -370,7 +446,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
                 <CopyableField label="Account No."  value="50200012345678" />
                 <CopyableField label="IFSC Code"    value="HDFC0001234" />
                 <CopyableField label="Account Name" value="ElectroHub Pvt. Ltd." />
-                <CopyableField label="Amount"       value={fmtINR(invoice.grandTotal)} />
+                <CopyableField label="Amount"       value={fmtINR(invoice.grand_total)} />
                 <CopyableField label="Ref / Narr."  value={invoice.invoiceNumber} />
               </div>
               <p className="text-xs text-[var(--text-subtle)] mt-3 italic">
@@ -423,7 +499,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
                 Complete your payment via NEFT, RTGS, or UPI using the details on the left, then confirm below. Your order will be dispatched after payment verification.
               </p>
               <div className="text-center py-2">
-                <p className="text-3xl font-bold font-display text-[var(--primary)] tabular-nums">{fmtINR(invoice.grandTotal)}</p>
+                <p className="text-3xl font-bold font-display text-[var(--primary)] tabular-nums">{fmtINR(invoice.pendingAmount)}</p>
                 <p className="text-xs text-[var(--text-muted)] mt-1">Amount payable</p>
               </div>
               <Button
@@ -447,7 +523,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
                 <p className="font-semibold text-[var(--success)]">Payment Confirmed</p>
               </div>
               <div className="text-center py-2">
-                <p className="text-3xl font-bold font-display text-[var(--success)] tabular-nums">{fmtINR(invoice.grandTotal)}</p>
+                <p className="text-3xl font-bold font-display text-[var(--success)] tabular-nums">{fmtINR(invoice.grand_total)}</p>
                 <p className="text-xs text-[var(--text-muted)] mt-1">Amount received</p>
               </div>
               <p className="text-sm text-[var(--text-muted)]">
@@ -482,7 +558,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
                 {invoice.isIntraState ? 'CGST + SGST (Intra-state)' : 'IGST (Inter-state)'}
               </span>
             </DataRow>
-            <DataRow label="Tax Rate"><span>{quotation.taxPct}% GST</span></DataRow>
+            <DataRow label="Tax Rate"><span>{quotation.tax_pct}% GST</span></DataRow>
             <DataRow label="Seller GSTIN"><span className="font-mono text-xs">29ABCDE1234F1Z5</span></DataRow>
           </SectionCard>
 
@@ -510,6 +586,36 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
         invoice={invoice}
         onConfirm={handleConfirm}
       />
+
+      {/* ── Hidden Print Area ── */}
+      <div className="hidden print:block">
+        <InvoiceDocument
+          quotation={{
+            ...quotation,
+            quotationNumber: quotation.quotation_number || '',
+            productName: quotation.product_name || '',
+            productType: quotation.product_type || 'existing',
+            quantity: quotation.quantity || 0,
+            unitPrice: quotation.unit_price || 0,
+            discountPct: quotation.discount_pct || 0,
+            taxPct: quotation.tax_pct || 18,
+            shippingCharge: quotation.shipping_charge || 0,
+            customerName: (quotation.rfq as any)?.customer?.first_name || '',
+            customerEmail: (quotation.rfq as any)?.customer?.email || '',
+            customerCompany: (quotation.rfq as any)?.customer?.vendor_profile?.company_name || 'Customer',
+            deliveryLocation: (quotation.rfq as any)?.delivery_location || '',
+          } as any}
+          record={{
+            invoiceNumber: invoice.invoiceNumber,
+            status: invoice.status as any,
+            dueDate: invoice.dueDate,
+            buyerGstin: invoice.buyerGstin,
+            paidAt: invoice.paidAt,
+            utrReference: invoice.utrReference,
+            isIntraState: true,
+          } as any}
+        />
+      </div>
     </motion.div>
   );
 }

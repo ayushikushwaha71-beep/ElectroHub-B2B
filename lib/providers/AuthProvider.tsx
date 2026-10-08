@@ -36,12 +36,12 @@ const AuthContext = React.createContext<AuthContextValue | null>(null);
 
 const STORAGE_KEY = 'electrohub_user';
 
-function loadCurrentUser(): AuthUser | null {
+function loadCachedUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw    = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    return parsed ? { ...parsed, role: parsed.role ?? 'customer' } : null;
+    return parsed ? { ...parsed, role: (parsed.role ?? 'customer').toLowerCase() as AuthUser['role'] } : null;
   } catch { return null; }
 }
 
@@ -53,17 +53,75 @@ function persistCurrentUser(user: AuthUser | null) {
   } catch { /* ignore */ }
 }
 
+function clearAllTokens() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('electrohub_access_token');
+  localStorage.removeItem('electrohub_refresh_token');
+  localStorage.removeItem(STORAGE_KEY);
+}
+
 // ─── Provider ──────────────────────────────────────────────────────────────────
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user,      setUser]      = React.useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
-  const [hydrated,  setHydrated]  = React.useState(false);
+  // isHydrating = true until we've checked localStorage AND optionally the backend
+  const [isHydrating, setIsHydrating] = React.useState(true);
 
-  // Hydrate from localStorage on mount
+  // ── Session hydration on mount ─────────────────────────────────────────────
   React.useEffect(() => {
-    setUser(loadCurrentUser());
-    setHydrated(true);
-  }, []);
+    const cached = loadCachedUser();
+    const token  = typeof window !== 'undefined'
+      ? localStorage.getItem('electrohub_access_token')
+      : null;
+
+    if (!cached || !token) {
+      // No stored session — done immediately
+      setUser(null);
+      setIsHydrating(false);
+      return;
+    }
+
+    // We have a cached user + token. Use cached user immediately for fast paint,
+    // then silently verify with the backend in the background.
+    setUser(cached);
+
+    api.get<{
+      id: number;
+      email: string;
+      first_name: string;
+      last_name: string;
+      role: string;
+      date_joined: string;
+    }>('/profile/')
+      .then((profile) => {
+        // Build fresh AuthUser from live profile data
+        const freshUser: AuthUser = {
+          id:        String(profile.id),
+          name:      `${profile.first_name} ${profile.last_name}`.trim() || profile.email,
+          email:     profile.email,
+          createdAt: profile.date_joined,
+          role:      profile.role.toLowerCase() as AuthUser['role'],
+        };
+        setUser(freshUser);
+        persistCurrentUser(freshUser);
+      })
+      .catch(() => {
+        // 401 that couldn't be refreshed → api.ts already cleared tokens
+        // Check if access token was wiped (refresh expired too)
+        const stillHasToken = typeof window !== 'undefined'
+          ? localStorage.getItem('electrohub_access_token')
+          : null;
+        if (!stillHasToken) {
+          setUser(null);
+          persistCurrentUser(null);
+        }
+        // If token was silently refreshed by api.ts and the retry also failed,
+        // the tokens were already cleared above.
+      })
+      .finally(() => {
+        setIsHydrating(false);
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── login ──────────────────────────────────────────────────────────────────
   const login = React.useCallback(
@@ -71,12 +129,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       try {
         const response = await api.post<{
-          access: string;
+          access:  string;
           refresh: string;
           user: { id: number; name: string; email: string; role: AuthUser['role'] };
         }>('/login/', { email, password });
 
-        // Persist JWT tokens
         localStorage.setItem('electrohub_access_token',  response.access);
         localStorage.setItem('electrohub_refresh_token', response.refresh);
 
@@ -85,44 +142,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name:      response.user.name,
           email:     response.user.email,
           createdAt: new Date().toISOString(),
-          role:      response.user.role,
+          role:      (response.user.role as string).toLowerCase() as AuthUser['role'],
         };
         setUser(authUser);
         persistCurrentUser(authUser);
-        // Return the user directly so callers can route immediately
-        // without relying on async React state updates.
         return { error: null, user: authUser };
       } catch (err) {
-        // Fallback for UI demo testing if backend is unavailable/fails
-        const trimmedEmail = email.trim();
-        const trimmedPassword = password.trim();
-        if (trimmedEmail && trimmedPassword && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-          const lowerEmail = trimmedEmail.toLowerCase();
-          const role: AuthUser['role'] = lowerEmail.includes('admin')
-            ? 'admin'
-            : lowerEmail.includes('vendor')
-            ? 'vendor'
-            : 'customer';
-
-          const demoName = trimmedEmail.split('@')[0]
-            .replace(/[._-]+/g, ' ')
-            .replace(/\b\w/g, (c) => c.toUpperCase()) || 'Demo User';
-
-          const demoUser: AuthUser = {
-            id:        `demo_${Date.now()}`,
-            name:      demoName,
-            email:     trimmedEmail,
-            createdAt: new Date().toISOString(),
-            role,
-          };
-
-          localStorage.setItem('electrohub_access_token',  `demo_access_token_${Date.now()}`);
-          localStorage.setItem('electrohub_refresh_token', `demo_refresh_token_${Date.now()}`);
-          setUser(demoUser);
-          persistCurrentUser(demoUser);
-          return { error: null, user: demoUser };
-        }
-
         return {
           error: {
             field:   'general',
@@ -142,13 +167,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (name: string, email: string, password: string): Promise<LoginResult> => {
       setIsLoading(true);
       try {
-        // Split name into first/last
         const parts     = name.trim().split(/\s+/);
         const firstName = parts[0] ?? '';
         const lastName  = parts.slice(1).join(' ');
 
         const response = await api.post<{
-          access: string;
+          access:  string;
           refresh: string;
           user: { id: number; name: string; email: string; role: AuthUser['role'] };
         }>('/register/', {
@@ -159,7 +183,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           confirm_password: password,
         });
 
-        // Persist JWT tokens returned from registration
         localStorage.setItem('electrohub_access_token',  response.access);
         localStorage.setItem('electrohub_refresh_token', response.refresh);
 
@@ -168,14 +191,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name:      response.user.name || name,
           email:     response.user.email,
           createdAt: new Date().toISOString(),
-          role:      response.user.role,
+          role:      (response.user.role as string).toLowerCase() as AuthUser['role'],
         };
         setUser(authUser);
         persistCurrentUser(authUser);
         return { error: null, user: authUser };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Registration failed.';
-        // Try to surface email-specific errors
         const isEmailError = message.toLowerCase().includes('email') || message.toLowerCase().includes('already');
         return {
           error: {
@@ -193,23 +215,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // ── logout ─────────────────────────────────────────────────────────────────
   const logout = React.useCallback(() => {
-    // Fire-and-forget blacklist call
-    const refresh = typeof window !== 'undefined'
-      ? localStorage.getItem('electrohub_refresh_token')
-      : null;
+    const refresh     = typeof window !== 'undefined' ? localStorage.getItem('electrohub_refresh_token') : null;
+    const accessToken = typeof window !== 'undefined' ? localStorage.getItem('electrohub_access_token')  : null;
     if (refresh) {
-      const accessToken = localStorage.getItem('electrohub_access_token') ?? '';
-      api.post('/logout/', { refresh }, { token: accessToken }).catch(() => { /* ignore */ });
+      // Fire-and-forget blacklist — backend will invalidate the refresh token
+      api.post('/logout/', { refresh }, { token: accessToken ?? undefined }).catch(() => { /* ignore */ });
     }
-    // Clear local state regardless
-    localStorage.removeItem('electrohub_access_token');
-    localStorage.removeItem('electrohub_refresh_token');
+    clearAllTokens();
     setUser(null);
-    persistCurrentUser(null);
   }, []);
 
-  // Don't render children until we've hydrated (prevents SSR mismatch)
-  if (!hydrated) return null;
+  // Block rendering until hydration is done to prevent SSR/localStorage mismatch
+  if (isHydrating) return null;
 
   return (
     <AuthContext.Provider value={{ user, isLoggedIn: !!user, isLoading, login, register, logout }}>

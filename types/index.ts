@@ -407,15 +407,37 @@ export interface RevenueDataPoint {
 
 /** Shape of the customer-facing RFQ submission form */
 export interface RFQFormData {
-  productType:         'existing' | 'custom';
-  existingProductId?:  string;
+  productType:          'existing' | 'custom';
+  existingProductId?:   string;     // slug / string ID for local reference
+  existingProductNumericId?: number; // Django DB pk used in API payload
   existingProductName?: string;
-  customProductName:   string;
-  referenceUrl?:       string;
-  quantity:            number;
-  requiredByDate:      string;
-  deliveryLocation:    string;
-  budget:              string;
-  technicalSpecs:      string;
-  additionalNotes:     string;
+  customProductName:    string;
+  referenceUrl?:        string;
+  quantity:             number;
+  requiredByDate:       string;
+  deliveryLocation:     string;
+  budget:               string;
+  technicalSpecs:       string;
+  additionalNotes:      string;
+  hasAttachment?:       boolean;
+}
+
+export interface RFQProductOption {
+  id: string;             // slug or string id
+  numericId?: number;     // Django DB pk
+  name: string;
+  category?: string;
+  description?: string;
+  sku: string;
+  brand: string;
+  sellingPrice: number;
+}
+
+export interface RFQSubmission {
+  id?: string;
+  rfqNumber?: string;
+  status?: string;
+  createdAt?: string;
+  submittedAt?: string;
+  formData: RFQFormData;
 }

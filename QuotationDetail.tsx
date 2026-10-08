@@ -28,6 +28,7 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
+  Download,
   ExternalLink,
   FileText,
   IndianRupee,
@@ -53,19 +54,40 @@ import { Badge }   from '@/components/ui/Badge';
 import { Button }  from '@/components/ui/Button';
 import { Modal }   from '@/components/ui/Modal';
 import { B2BPayment } from './B2BPayment';
-import {
-  type MockQuotation,
-  type MockQuotationStatus,
-  type QuotationTotals,
-  calcQuotationTotals,
-} from './mockQuotations';
+import { Quotation, QuotationStatus } from '@/lib/quotation-api';
+
+export interface QuotationTotals {
+  subtotal: number;
+  discount: number;
+  taxable: number;
+  tax: number;
+  shipping: number;
+  grandTotal: number;
+}
+
+export function calcQuotationTotals(q: Quotation): QuotationTotals {
+  const qty = q.quantity || 0;
+  const unit = Number(q.unit_price) || 0;
+  const discPct = Number(q.discount_pct) || 0;
+  const taxPct = Number(q.tax_pct) || 0;
+  const shipping = Number(q.shipping_charge) || 0;
+
+  const subtotal = qty * unit;
+  const discount = subtotal * (discPct / 100);
+  const taxable = subtotal - discount;
+  const tax = taxable * (taxPct / 100);
+  const grandTotal = taxable + tax + shipping;
+
+  return { subtotal, discount, taxable, tax, shipping, grandTotal };
+}
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
 export const QUOT_STATUS_CONFIG: Record<
-  MockQuotationStatus,
+  QuotationStatus,
   { label: string; variant: 'default' | 'warning' | 'info' | 'success' | 'danger'; icon: React.ElementType }
 > = {
+  draft:             { label: 'Draft',              variant: 'default', icon: FileText      },
   sent:              { label: 'Quotation Received', variant: 'info',    icon: FileText      },
   viewed:            { label: 'Viewed',             variant: 'info',    icon: CheckCircle2  },
   negotiating:       { label: 'Under Negotiation',  variant: 'warning', icon: MessageSquare },
@@ -73,6 +95,7 @@ export const QUOT_STATUS_CONFIG: Record<
   accepted:          { label: 'Accepted',           variant: 'success', icon: CheckCircle2  },
   rejected:          { label: 'Rejected',           variant: 'danger',  icon: XCircle       },
   invoice_sent:      { label: 'Invoice Sent',       variant: 'info',    icon: Receipt       },
+  partially_paid:    { label: 'Partially Paid',     variant: 'warning', icon: IndianRupee   },
   payment_confirmed: { label: 'Payment Confirmed',  variant: 'success', icon: IndianRupee   },
 };
 
@@ -169,7 +192,7 @@ function TotalRow({
 
 // ─── Negotiation History Timeline ─────────────────────────────────────────────
 
-function NegotiationHistory({ quotation }: { quotation: MockQuotation }) {
+function NegotiationHistory({ quotation }: { quotation: Quotation }) {
   if (quotation.negotiations.length === 0) {
     return (
       <div className="text-center py-6 text-[var(--text-subtle)] text-sm italic">
@@ -196,9 +219,9 @@ function NegotiationHistory({ quotation }: { quotation: MockQuotation }) {
             <Badge variant="info" size="xs">Original Quote</Badge>
           </div>
           <p className="text-sm text-[var(--text-muted)] mt-0.5">
-            Unit price: <strong className="text-[var(--text)]">{fmtINR(quotation.unitPrice)}</strong>
+            Unit price: <strong className="text-[var(--text)]">{fmtINR(Number(quotation.unit_price))}</strong>
           </p>
-          <p className="text-xs text-[var(--text-subtle)] mt-0.5">{fmtDateTime(quotation.sentAt)}</p>
+          <p className="text-xs text-[var(--text-subtle)] mt-0.5">{fmtDateTime(quotation.sent_at || quotation.created_at)}</p>
         </div>
       </div>
 
@@ -231,7 +254,7 @@ function NegotiationHistory({ quotation }: { quotation: MockQuotation }) {
               </div>
               <p className="text-sm text-[var(--text-muted)] mt-0.5">
                 Proposed price:{' '}
-                <strong className="text-[var(--text)]">{fmtINR(entry.proposedPrice)}/unit</strong>
+                <strong className="text-[var(--text)]">{fmtINR(Number(entry.proposed_price))}/unit</strong>
               </p>
               {entry.message && (
                 <div className={cn(
@@ -262,10 +285,10 @@ function NegotiateModal({
 }: {
   open:        boolean;
   onClose:     () => void;
-  quotation:   MockQuotation;
-  onSubmit:    (proposedPrice: number, message: string) => void;
+  quotation:   Quotation;
+  onSubmit:    (proposed_price: number, message: string) => void;
 }) {
-  const [price, setPrice]     = React.useState(String(quotation.unitPrice));
+  const [price, setPrice]     = React.useState(String(quotation.unit_price));
   const [message, setMessage] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError]     = React.useState('');
@@ -273,11 +296,11 @@ function NegotiateModal({
   // Reset on open
   React.useEffect(() => {
     if (open) {
-      setPrice(String(quotation.unitPrice));
+      setPrice(String(quotation.unit_price));
       setMessage('');
       setError('');
     }
-  }, [open, quotation.unitPrice]);
+  }, [open, quotation.unit_price]);
 
   const handleSubmit = async () => {
     const parsed = parseFloat(price);
@@ -298,7 +321,7 @@ function NegotiateModal({
   };
 
   const saving = parseFloat(price) > 0
-    ? ((quotation.unitPrice - parseFloat(price)) / quotation.unitPrice * 100).toFixed(1)
+    ? ((Number(quotation.unit_price) - parseFloat(price)) / Number(quotation.unit_price) * 100).toFixed(1)
     : '0';
 
   return (
@@ -319,16 +342,16 @@ function NegotiateModal({
           <DollarSign size={15} className="text-[var(--text-subtle)] shrink-0" />
           <div>
             <p className="text-xs text-[var(--text-subtle)]">Current quoted price</p>
-            <p className="text-sm font-bold text-[var(--text)]">{fmtINR(quotation.unitPrice)} / unit</p>
+            <p className="text-sm font-bold text-[var(--text)]">{fmtINR(Number(quotation.unit_price))} / unit</p>
           </div>
-          {parseFloat(price) > 0 && parseFloat(price) !== quotation.unitPrice && (
+          {parseFloat(price) > 0 && parseFloat(price) !== Number(quotation.unit_price) && (
             <div className="ml-auto text-right">
               <p className="text-xs text-[var(--text-subtle)]">Your saving</p>
               <p className={cn(
                 'text-sm font-semibold',
-                parseFloat(price) < quotation.unitPrice ? 'text-[var(--success)]' : 'text-[var(--danger)]',
+                parseFloat(price) < Number(quotation.unit_price) ? 'text-[var(--success)]' : 'text-[var(--danger)]',
               )}>
-                {parseFloat(price) < quotation.unitPrice ? '-' : '+'}{saving}%
+                {parseFloat(price) < Number(quotation.unit_price) ? '-' : '+'}{saving}%
               </p>
             </div>
           )}
@@ -480,7 +503,7 @@ interface LifecycleStep {
   key:    string;
   label:  string;
   icon:   React.ElementType;
-  doneAt: MockQuotationStatus[];
+  doneAt: QuotationStatus[];
 }
 
 const LIFECYCLE_STEPS: LifecycleStep[] = [
@@ -498,7 +521,7 @@ function LifecycleStepper({
   status,
   onNavigateToOrders,
 }: {
-  status:              MockQuotationStatus;
+  status:              QuotationStatus;
   onNavigateToOrders?: () => void;
 }) {
   const doneSet = new Set(
@@ -593,12 +616,22 @@ function LifecycleStepper({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface QuotationDetailProps {
-  quotation:            MockQuotation;
+  quotation:            Quotation;
   onBack:               () => void;
-  onStatusChange:       (status: MockQuotationStatus) => void;
-  onAddNegotiation:     (proposedPrice: number, message: string) => void;
-  onPaymentSubmit?:     (utr: string) => void;
+  onStatusChange:       (status: QuotationStatus) => void;
+  onAddNegotiation:     (proposed_price: number, message: string) => void;
+  onPaymentSubmit?:     (amount: number, utr: string) => void;
   onNavigateToOrders?:  () => void;
+}
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+
+function downloadInvoicePdf(quotationId: number) {
+  const token = typeof window !== 'undefined'
+    ? (localStorage.getItem('electrohub_access_token') || '')
+    : '';
+  const url = `${API_BASE}/quotations/${quotationId}/invoice/pdf/?token=${encodeURIComponent(token)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 export function QuotationDetail({
@@ -615,7 +648,7 @@ export function QuotationDetail({
   const totals      = calcQuotationTotals(quotation);
   const statusCfg   = QUOT_STATUS_CONFIG[quotation.status];
   const StatusIcon  = statusCfg.icon;
-  const daysLeft    = quotation.validUntil ? daysUntil(quotation.validUntil) : null;
+  const daysLeft    = quotation.valid_until ? daysUntil(quotation.valid_until) : null;
   const isExpired   = daysLeft !== null && daysLeft < 0;
   const isExpiring  = daysLeft !== null && daysLeft >= 0 && daysLeft <= 3;
   // canAct: only for negotiable statuses; invoice/payment statuses are read-only
@@ -643,13 +676,13 @@ export function QuotationDetail({
     onStatusChange('rejected');
   };
 
-  const handleNegotiate = (proposedPrice: number, message: string) => {
-    onAddNegotiation(proposedPrice, message);
+  const handleNegotiate = (proposed_price: number, message: string) => {
+    onAddNegotiation(proposed_price, message);
   };
 
-  const handlePaymentSubmit = (utr: string) => {
+  const handlePaymentSubmit = (amount: number, utr: string) => {
     onStatusChange('payment_confirmed');
-    onPaymentSubmit?.(utr);
+    onPaymentSubmit?.(amount, utr);
   };
 
   return (
@@ -675,21 +708,34 @@ export function QuotationDetail({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-bold font-display text-lg text-[var(--text)] font-mono">
-                {quotation.quotationNumber}
+                {quotation.quotation_number}
               </h2>
               <Badge variant={statusCfg.variant} size="sm" icon={<StatusIcon size={11} />}>
                 {statusCfg.label}
               </Badge>
             </div>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">
-              For RFQ: <span className="font-mono">{quotation.rfqNumber}</span>
-              {' · '}Received {fmtDate(quotation.sentAt)}
+              For RFQ: <span className="font-mono">{quotation.rfq_number}</span>
+              {' · '}Received {fmtDate(quotation.sent_at || quotation.created_at)}
             </p>
           </div>
+          {/* Download Invoice PDF — visible once invoice is created */}
+          {quotation.invoice && (
+            <Button
+              variant="outline"
+              size="sm"
+              leftIcon={<Download size={14} />}
+              onClick={() => downloadInvoicePdf(quotation.id)}
+              id="quot-download-pdf"
+              title="Download Invoice PDF"
+            >
+              Invoice PDF
+            </Button>
+          )}
         </div>
 
         {/* ── Validity warning ── */}
-        {quotation.validUntil && (isExpired || isExpiring) && (
+        {quotation.valid_until && (isExpired || isExpiring) && (
           <div className={cn(
             'flex items-start gap-3 px-4 py-3 rounded-xl border',
             isExpired
@@ -699,8 +745,8 @@ export function QuotationDetail({
             <AlertTriangle size={15} className={cn('shrink-0 mt-0.5', isExpired ? 'text-[var(--danger)]' : 'text-amber-500')} />
             <p className="text-sm">
               {isExpired
-                ? `This quotation expired on ${fmtDate(quotation.validUntil)}. Contact us to request a new quote.`
-                : `This quotation expires on ${fmtDate(quotation.validUntil)} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left). Please respond soon.`
+                ? `This quotation expired on ${fmtDate(quotation.valid_until || '')}. Contact us to request a new quote.`
+                : `This quotation expires on ${fmtDate(quotation.valid_until || '')} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left). Please respond soon.`
               }
             </p>
           </div>
@@ -790,33 +836,18 @@ export function QuotationDetail({
 
             {/* Product */}
             <SectionCard
-              icon={quotation.productType === 'existing' ? Package : Sparkles}
+              icon={quotation.product_type === 'existing' ? Package : Sparkles}
               title="Product / Requirement"
             >
               <DataRow label="Name">
-                <span className="leading-snug">{quotation.productName}</span>
+                <span className="leading-snug">{quotation.product_name}</span>
               </DataRow>
               <DataRow label="Type">
-                <Badge variant={quotation.productType === 'existing' ? 'primary' : 'info'} size="xs">
-                  {quotation.productType === 'existing' ? 'ElectroHub Catalogue' : 'Custom / External'}
+                <Badge variant={quotation.product_type === 'existing' ? 'primary' : 'info'} size="xs">
+                  {quotation.product_type === 'existing' ? 'ElectroHub Catalogue' : 'Custom / External'}
                 </Badge>
               </DataRow>
-              {quotation.referenceUrl && (
-                <DataRow label="Reference URL">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <a
-                      href={quotation.referenceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[var(--primary)] hover:underline inline-flex items-center gap-1.5 text-sm"
-                    >
-                      <Link2 size={12} />
-                      <span className="truncate max-w-[200px]">{quotation.referenceUrl}</span>
-                      <ExternalLink size={11} />
-                    </a>
-                  </div>
-                </DataRow>
-              )}
+              
             </SectionCard>
 
             {/* Pricing breakdown */}
@@ -834,9 +865,9 @@ export function QuotationDetail({
                   </thead>
                   <tbody>
                     <tr className="border-b border-[var(--border)]">
-                      <td className="py-2.5 pr-4 font-medium text-[var(--text)]">{quotation.productName}</td>
+                      <td className="py-2.5 pr-4 font-medium text-[var(--text)]">{quotation.product_name}</td>
                       <td className="py-2.5 px-3 text-right text-[var(--text)]">{quotation.quantity.toLocaleString('en-IN')}</td>
-                      <td className="py-2.5 px-3 text-right font-semibold text-[var(--text)]">{fmtINR(quotation.unitPrice)}</td>
+                      <td className="py-2.5 px-3 text-right font-semibold text-[var(--text)]">{fmtINR(Number(quotation.unit_price))}</td>
                       <td className="py-2.5 pl-3 text-right font-semibold text-[var(--text)]">{fmtINR(totals.subtotal)}</td>
                     </tr>
                   </tbody>
@@ -847,12 +878,12 @@ export function QuotationDetail({
               <div className="space-y-1.5">
                 <TotalRow label="Subtotal" value={fmtINR(totals.subtotal)} />
                 <TotalRow
-                  label={`Discount (${quotation.discountPct}%)`}
+                  label={`Discount (${quotation.discount_pct}%)`}
                   value={`-${fmtINR(totals.discount)}`}
                   muted={totals.discount === 0}
                 />
                 <TotalRow
-                  label={`GST / Tax (${quotation.taxPct}%)`}
+                  label={`GST / Tax (${quotation.tax_pct}%)`}
                   value={fmtINR(totals.tax)}
                 />
                 <TotalRow
@@ -869,13 +900,13 @@ export function QuotationDetail({
               <DataRow label="Location">
                 <span className="flex items-center gap-1.5">
                   <MapPin size={12} className="text-[var(--text-subtle)] shrink-0" />
-                  {quotation.deliveryLocation}
+                  {quotation.delivery_location}
                 </span>
               </DataRow>
               <DataRow label="Expected By">
                 <span className="flex items-center gap-1.5">
                   <Calendar size={12} className="text-[var(--text-subtle)] shrink-0" />
-                  {fmtDate(quotation.expectedDelivery)}
+                  {fmtDate(quotation.expected_delivery || '')}
                 </span>
               </DataRow>
               <DataRow label="Valid Until">
@@ -884,7 +915,7 @@ export function QuotationDetail({
                   isExpired ? 'text-[var(--danger)]' : isExpiring ? 'text-amber-500' : '',
                 )}>
                   <Clock size={12} className="shrink-0" />
-                  {fmtDate(quotation.validUntil)}
+                  {fmtDate(quotation.valid_until || '')}
                   {daysLeft !== null && !isExpired && (
                     <span className={cn(
                       'text-xs px-1.5 py-0.5 rounded-full font-medium',
@@ -901,10 +932,10 @@ export function QuotationDetail({
             </SectionCard>
 
             {/* Terms */}
-            {quotation.termsNotes && (
+            {quotation.terms_notes && (
               <SectionCard icon={NotebookText} title="Terms & Conditions">
                 <p className="text-sm text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap">
-                  {quotation.termsNotes}
+                  {quotation.terms_notes}
                 </p>
               </SectionCard>
             )}
@@ -923,9 +954,9 @@ export function QuotationDetail({
             <SectionCard icon={Warehouse} title="Availability">
               <div className="grid grid-cols-2 gap-2 mb-3">
                 {[
-                  { label: 'Available', value: quotation.availableQty, tone: 'border-[var(--border)] bg-[var(--background-alt)]' },
-                  { label: 'Reserved',  value: quotation.reservedQty,  tone: 'border-amber-500/20 bg-amber-500/5' },
-                  { label: 'Incoming',  value: quotation.incomingQty,  tone: 'border-blue-500/20 bg-blue-500/5' },
+                  { label: 'Available', value: quotation.available_qty, tone: 'border-[var(--border)] bg-[var(--background-alt)]' },
+                  { label: 'Reserved',  value: quotation.reserved_qty,  tone: 'border-amber-500/20 bg-amber-500/5' },
+                  { label: 'Incoming',  value: quotation.incoming_qty,  tone: 'border-blue-500/20 bg-blue-500/5' },
                 ].map(({ label, value, tone }) => (
                   <div key={label} className={cn('flex flex-col items-center gap-0.5 px-3 py-2.5 rounded-xl border', tone)}>
                     <span className="text-lg font-bold text-[var(--text)]">{value.toLocaleString('en-IN')}</span>
@@ -947,12 +978,12 @@ export function QuotationDetail({
             {/* Quick summary */}
             <SectionCard icon={FileText} title="Quotation Summary">
               {[
-                { label: 'Quotation #', value: quotation.quotationNumber },
-                { label: 'For RFQ',     value: quotation.rfqNumber },
+                { label: 'Quotation #', value: quotation.quotation_number },
+                { label: 'For RFQ',     value: quotation.rfq_number },
                 { label: 'Quantity',    value: `${quotation.quantity.toLocaleString('en-IN')} units` },
-                { label: 'Unit Price',  value: fmtINR(quotation.unitPrice) },
+                { label: 'Unit Price',  value: fmtINR(Number(quotation.unit_price)) },
                 { label: 'Grand Total', value: fmtINR(totals.grandTotal) },
-                { label: 'Valid Until', value: fmtDate(quotation.validUntil) },
+                { label: 'Valid Until', value: fmtDate(quotation.valid_until || '') },
               ].map(({ label, value }) => (
                 <div key={label} className="flex gap-3 py-1.5 border-b border-[var(--border)] last:border-0">
                   <span className="text-xs text-[var(--text-subtle)] w-24 shrink-0">{label}</span>
@@ -978,7 +1009,7 @@ export function QuotationDetail({
               <div>
                 <p className="text-sm font-semibold text-[var(--text)]">Status: {statusCfg.label}</p>
                 <p className="text-xs text-[var(--text-muted)]">
-                  Updated {fmtDateTime(quotation.updatedAt)}
+                  Updated {fmtDateTime(quotation.updated_at)}
                 </p>
               </div>
             </div>
@@ -1001,14 +1032,14 @@ export function QuotationDetail({
         onClose={() => setConfirmMode(null)}
         mode="accept"
         onConfirm={handleAccept}
-        quotNumber={quotation.quotationNumber}
+        quotNumber={quotation.quotation_number}
       />
       <ConfirmModal
         open={confirmMode === 'reject'}
         onClose={() => setConfirmMode(null)}
         mode="reject"
         onConfirm={handleReject}
-        quotNumber={quotation.quotationNumber}
+        quotNumber={quotation.quotation_number}
       />
     </>
   );

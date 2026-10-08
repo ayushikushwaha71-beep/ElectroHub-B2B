@@ -582,3 +582,56 @@ img {
     scroll-behavior: auto !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Print Media Query for PDF Generation
+   ═══════════════════════════════════════════════════════════════════════════════ */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #po-print-root, #po-print-root * {
+    visibility: visible;
+  }
+  #inv-print-root, #inv-print-root * {
+    visibility: visible;
+  }
+  #quot-print-root, #quot-print-root * {
+    visibility: visible;
+  }
+  #po-print-root, #inv-print-root, #quot-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    border: none;
+    background: transparent;
+  }
+  /* Hide print hidden elements inside printable area if needed */
+  .print\:hidden {
+    display: none !important;
+  }
+  
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+
+  /* Force tables to be continuous and repeat headers */
+  table {
+    page-break-inside: auto;
+  }
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+}

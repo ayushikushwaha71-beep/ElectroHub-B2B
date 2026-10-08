@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import {
-  Building2, CheckCircle2, LayoutDashboard, LogOut, Package, Pencil,
+  Building2, CheckCircle2, ClipboardList, LayoutDashboard, LogOut, Package, Pencil,
   Plus, ShieldCheck, ShoppingBag, Store, Trash2, Users, XCircle, Clock,
-  Save, X as XIcon,
+  Save, X as XIcon, ChevronDown, ChevronUp, Send, AlertCircle, CalendarClock,
 } from 'lucide-react';
 import { Button }       from '@/components/ui/Button';
 import { Card }         from '@/components/ui/Card';
@@ -100,11 +100,12 @@ function Shell({ children, active }: { children: React.ReactNode; active: string
   const { user, logout } = useAuth();
   const router = useRouter();
   const links = [
-    ['Dashboard',        '/vendor/dashboard',       LayoutDashboard],
-    ['My Products',      '/vendor/products',        Package],
-    ['Add Product',      '/vendor/products/add',    Plus],
-    ['Orders',           '/vendor/orders',          ShoppingBag],
-    ['Business Profile', '/vendor/profile',         Building2],
+    ['Dashboard',        '/vendor/dashboard',     LayoutDashboard],
+    ['My Products',      '/vendor/products',      Package],
+    ['Add Product',      '/vendor/products/add',  Plus],
+    ['Orders',           '/vendor/orders',        ShoppingBag],
+    ['Dealer Requests',  '/vendor/requests',      ClipboardList],
+    ['Business Profile', '/vendor/profile',       Building2],
   ] as const;
   return (
     <GlobalLayout>
@@ -815,3 +816,754 @@ export function RealAdminVendors() {
     </AdminGuard>
   );
 }
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VENDOR QUOTATION BUILDER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ProductDisplay {
+  id: number;
+  name: string;
+  sku: string;
+}
+
+type VendorRequest = {
+  id: number;
+  quotation: number;
+  quotation_number: string;
+  quotation_status: string;
+  rfq_number: string;
+  product_name: string;
+  product_display: ProductDisplay | null;
+  quantity: number;
+  unit_price: string;
+  discount_pct: string;
+  tax_pct: string;
+  availability_qty: number;
+  available_from: string | null;
+  vendor_quote_ref: string;
+  notes: string;
+  required_by_date: string;
+  delivery_location: string;
+  customer_name: string | null;
+  customer_email: string | null;
+  rfq_technical_specs: string;
+  rfq_additional_notes: string;
+  line_total: number;
+  line_total_with_tax: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type QuotationHeader = {
+  id: number;
+  quotation_number: string;
+  status: string;
+  shipping_charge: string;
+  expected_delivery: string | null;
+  valid_until: string | null;
+  terms_notes: string;
+  grand_total: number;
+  delivery_location: string;
+  created_at: string;
+  rfq: {
+    rfq_number: string;
+    required_by_date: string | null;
+    delivery_location: string;
+    technical_specs: string;
+    additional_notes: string;
+  } | number;
+};
+
+// ─── Status helper ─────────────────────────────────────────────────────────────
+function quotationStatusVariant(status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' {
+  const map: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'default'> = {
+    draft: 'default', sent: 'info', viewed: 'info', negotiating: 'warning',
+    revised: 'warning', accepted: 'success', rejected: 'danger',
+    invoice_sent: 'info', payment_confirmed: 'success',
+  };
+  return map[status] ?? 'default';
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-2 text-sm">
+      <span className="text-[var(--text-muted)] min-w-[110px] shrink-0">{label}:</span>
+      <span className="text-[var(--text)] font-medium break-words">{value}</span>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-xs font-bold uppercase tracking-widest text-[var(--primary)] mb-3">
+      {children}
+    </p>
+  );
+}
+
+function LField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-sm font-medium text-[var(--text)]">{label}</label>
+      {children}
+      {hint && <p className="text-xs text-[var(--text-muted)]">{hint}</p>}
+    </div>
+  );
+}
+
+const iCls = "h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--background-card)] px-3 text-sm text-[var(--text)] focus:border-[var(--primary)] outline-none transition-colors";
+const taCls = "w-full rounded-lg border border-[var(--border)] bg-[var(--background-card)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--primary)] outline-none transition-colors resize-none";
+
+// ─── Item form state ──────────────────────────────────────────────────────────
+type ItemForm = {
+  unit_price: string;
+  discount_pct: string;
+  tax_pct: string;
+  availability_qty: string;
+  available_from: string;
+  vendor_quote_ref: string;
+  notes: string;
+};
+
+function makeItemForm(item: VendorRequest): ItemForm {
+  return {
+    unit_price:       String(item.unit_price       ?? '0'),
+    discount_pct:     String(item.discount_pct     ?? '0'),
+    tax_pct:          String(item.tax_pct          ?? '18'),
+    availability_qty: String(item.availability_qty ?? 0),
+    available_from:   item.available_from           ?? '',
+    vendor_quote_ref: item.vendor_quote_ref         ?? '',
+    notes:            item.notes                   ?? '',
+  };
+}
+
+function calcTotals(f: ItemForm, qty: number) {
+  const price   = parseFloat(f.unit_price   || '0') || 0;
+  const disc    = parseFloat(f.discount_pct || '0') || 0;
+  const taxPct  = parseFloat(f.tax_pct      || '0') || 0;
+  const sub     = price * qty;
+  const discAmt = sub * (disc / 100);
+  const taxable = sub - discAmt;
+  const taxAmt  = taxable * (taxPct / 100);
+  return { sub, discAmt, taxable, taxAmt, total: taxable + taxAmt };
+}
+
+// ─── Line item card ───────────────────────────────────────────────────────────
+function LineItem({
+  item,
+  form,
+  onChange,
+}: {
+  item: VendorRequest;
+  form: ItemForm;
+  onChange: (p: Partial<ItemForm>) => void;
+}) {
+  const { total, discAmt, taxAmt } = calcTotals(form, item.quantity);
+  const avail      = parseInt(form.availability_qty || '0', 10);
+  const canFulfill = avail >= item.quantity;
+
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--background-card)] p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="font-semibold text-[var(--text)]">{item.product_name}</p>
+          {item.product_display && (
+            <p className="text-xs text-[var(--text-muted)]">SKU: {item.product_display.sku}</p>
+          )}
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
+            Qty requested: <strong className="text-[var(--text)]">{item.quantity}</strong>
+            {item.required_by_date && (
+              <span> · By <strong className="text-[var(--text)]">
+                {new Date(item.required_by_date).toLocaleDateString('en-IN')}
+              </strong></span>
+            )}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-xl font-bold text-[var(--primary)]">
+            ₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs text-[var(--text-muted)]">line total incl. tax</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <LField label="Unit Price (₹) *">
+          <input type="number" step="0.01" min="0"
+            value={form.unit_price}
+            onChange={(e) => onChange({ unit_price: e.target.value })}
+            className={iCls} placeholder="0.00" />
+        </LField>
+        <LField label="Discount %" hint={discAmt > 0 ? `−₹${discAmt.toFixed(2)}` : ''}>
+          <input type="number" step="0.01" min="0" max="100"
+            value={form.discount_pct}
+            onChange={(e) => onChange({ discount_pct: e.target.value })}
+            className={iCls} placeholder="0" />
+        </LField>
+        <LField label="GST / Tax %" hint={`+₹${taxAmt.toFixed(2)}`}>
+          <input type="number" step="0.01" min="0" max="100"
+            value={form.tax_pct}
+            onChange={(e) => onChange({ tax_pct: e.target.value })}
+            className={iCls} placeholder="18" />
+        </LField>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <LField label="Available Qty">
+          <input type="number" min="0"
+            value={form.availability_qty}
+            onChange={(e) => onChange({ availability_qty: e.target.value })}
+            className={iCls} placeholder="0" />
+          <div className={`mt-1 flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+            canFulfill ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400'
+                       : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+          }`}>
+            {canFulfill ? '✓ Can fulfill' : '⚠ Partial / unavailable'}
+          </div>
+        </LField>
+        <LField label="Available From" hint="Blank = immediate">
+          <input type="date"
+            value={form.available_from}
+            onChange={(e) => onChange({ available_from: e.target.value })}
+            className={iCls} />
+        </LField>
+        <LField label="Your Quote Reference">
+          <input type="text"
+            value={form.vendor_quote_ref}
+            onChange={(e) => onChange({ vendor_quote_ref: e.target.value })}
+            className={iCls} placeholder="e.g. Q-2026-001" />
+        </LField>
+      </div>
+
+      <LField label="Item Notes">
+        <textarea rows={2}
+          value={form.notes}
+          onChange={(e) => onChange({ notes: e.target.value })}
+          className={taCls}
+          placeholder="Lead time, packing, condition, warranty…" />
+      </LField>
+    </div>
+  );
+}
+
+// ─── Terms state ──────────────────────────────────────────────────────────────
+type TermsForm = {
+  expected_delivery: string;
+  valid_until:       string;
+  shipping_charge:   string;
+  payment_terms:     string;
+  return_terms:      string;
+  special_terms:     string;
+};
+
+function makeTerms(q?: QuotationHeader): TermsForm {
+  let parsed: Record<string, string> = {};
+  if (q?.terms_notes) {
+    try { parsed = JSON.parse(q.terms_notes); } catch { parsed = { special_terms: q.terms_notes }; }
+  }
+  return {
+    expected_delivery: q?.expected_delivery ?? '',
+    valid_until:       q?.valid_until       ?? '',
+    shipping_charge:   q?.shipping_charge   ?? '0',
+    payment_terms:     parsed.payment_terms  ?? '',
+    return_terms:      parsed.return_terms   ?? '',
+    special_terms:     parsed.special_terms  ?? '',
+  };
+}
+
+function packTerms(t: TermsForm): string {
+  return JSON.stringify({
+    payment_terms: t.payment_terms,
+    return_terms:  t.return_terms,
+    special_terms: t.special_terms,
+  });
+}
+
+// ─── Grand total summary ───────────────────────────────────────────────────────
+function GrandSummary({
+  items,
+  forms,
+  shipping,
+}: {
+  items: VendorRequest[];
+  forms: Record<number, ItemForm>;
+  shipping: string;
+}) {
+  let sub = 0, disc = 0, tax = 0;
+  items.forEach((item) => {
+    const f = forms[item.id];
+    if (!f) return;
+    const t = calcTotals(f, item.quantity);
+    sub  += parseFloat(f.unit_price || '0') * item.quantity;
+    disc += t.discAmt;
+    tax  += t.taxAmt;
+  });
+  const ship  = parseFloat(shipping || '0') || 0;
+  const grand = sub - disc + tax + ship;
+
+  return (
+    <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--background-alt)] p-5 space-y-2 text-sm">
+      <SectionTitle>Quotation Summary</SectionTitle>
+      <div className="flex justify-between">
+        <span className="text-[var(--text-muted)]">Subtotal</span>
+        <span className="font-medium">₹{sub.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+      </div>
+      {disc > 0 && (
+        <div className="flex justify-between text-green-600">
+          <span>Discount</span>
+          <span>−₹{disc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+        </div>
+      )}
+      <div className="flex justify-between">
+        <span className="text-[var(--text-muted)]">GST / Tax</span>
+        <span className="font-medium">₹{tax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+      </div>
+      {ship > 0 && (
+        <div className="flex justify-between">
+          <span className="text-[var(--text-muted)]">Delivery Charges</span>
+          <span className="font-medium">₹{ship.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+        </div>
+      )}
+      <div className="flex justify-between border-t border-[var(--border)] pt-2 mt-1">
+        <span className="font-bold text-[var(--text)]">Grand Total</span>
+        <span className="text-xl font-bold text-[var(--primary)]">
+          ₹{grand.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Full Quotation Builder ────────────────────────────────────────────────────
+function VendorQuotationBuilder({
+  quotationId,
+  initialItems,
+  onBack,
+  onSaved,
+}: {
+  quotationId: number;
+  initialItems: VendorRequest[];
+  onBack: () => void;
+  onSaved: (updated: VendorRequest[]) => void;
+}) {
+  const [items, setItems]   = React.useState<VendorRequest[]>(initialItems);
+  const [forms, setForms]   = React.useState<Record<number, ItemForm>>(() => {
+    const m: Record<number, ItemForm> = {};
+    initialItems.forEach((it) => { m[it.id] = makeItemForm(it); });
+    return m;
+  });
+  const [terms, setTerms]   = React.useState<TermsForm>(makeTerms);
+  const [header, setHeader] = React.useState<QuotationHeader | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+
+  React.useEffect(() => {
+    api.get<{ quotation: QuotationHeader; vendor_items: VendorRequest[] }>(
+      `/quotations/vendor/quotations/${quotationId}/`
+    ).then((res) => {
+      setHeader(res.quotation);
+      setTerms(makeTerms(res.quotation));
+      const si = res.vendor_items;
+      setItems(si);
+      const m: Record<number, ItemForm> = {};
+      si.forEach((it) => { m[it.id] = makeItemForm(it); });
+      setForms(m);
+    }).catch(() => {});
+  }, [quotationId]);
+
+  const updateForm = (id: number, patch: Partial<ItemForm>) =>
+    setForms((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+
+  const buildPayloads = () => ({
+    itemsPayload: items.map((it) => ({ id: it.id, ...forms[it.id] })),
+    termsPayload: {
+      expected_delivery: terms.expected_delivery || null,
+      valid_until:       terms.valid_until       || null,
+      shipping_charge:   terms.shipping_charge   || '0',
+      terms_notes:       packTerms(terms),
+    },
+  });
+
+  const saveDraft = async () => {
+    setSaving(true);
+    try {
+      const { itemsPayload, termsPayload } = buildPayloads();
+      const bulkRes = await api.post<{ updated: VendorRequest[]; errors: unknown[] }>(
+        `/quotations/vendor/quotations/${quotationId}/items/bulk/`,
+        { items: itemsPayload }
+      );
+      await api.patch(`/quotations/vendor/quotations/${quotationId}/terms/`, termsPayload);
+      if (bulkRes.errors?.length) toast.error(`${bulkRes.errors.length} item(s) had errors.`);
+      if (bulkRes.updated?.length) { setItems(bulkRes.updated); onSaved(bulkRes.updated); }
+      toast.success('Draft saved.');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sendQuotation = async () => {
+    setSending(true);
+    try {
+      const { itemsPayload, termsPayload } = buildPayloads();
+      await api.post(`/quotations/vendor/quotations/${quotationId}/items/bulk/`, { items: itemsPayload });
+      await api.patch(`/quotations/vendor/quotations/${quotationId}/terms/`, termsPayload);
+      const res = await api.post<{ quotation: QuotationHeader; vendor_items: VendorRequest[]; message: string }>(
+        `/quotations/vendor/quotations/${quotationId}/submit/`
+      );
+      toast.success(res.message ?? 'Quotation submitted to customer.');
+      onSaved(res.vendor_items);
+      onBack();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Send failed. Ensure all items have a unit price.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const rfqInfo = header && typeof header.rfq === 'object' ? header.rfq : null;
+
+  return (
+    <div className="space-y-6">
+      {/* Top bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="text-sm text-[var(--text-muted)] hover:text-[var(--text)] transition-colors">
+            ← Back
+          </button>
+          <div>
+            <h2 className="text-xl font-bold text-[var(--text)]">
+              Quotation Builder
+              {header && <span className="ml-2 text-base font-normal text-[var(--text-muted)]">#{header.quotation_number}</span>}
+            </h2>
+            <p className="text-sm text-[var(--text-muted)]">Fill in pricing and terms, then save or send.</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={saveDraft} isLoading={saving} leftIcon={<Save size={13} />}>Save Draft</Button>
+          <Button size="sm" onClick={sendQuotation} isLoading={sending} leftIcon={<Send size={13} />}>Send to Customer</Button>
+        </div>
+      </div>
+
+      {/* RFQ context */}
+      {(rfqInfo || header) && (
+        <Card className="p-4 bg-[var(--background-alt)]">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {header && <InfoRow label="Quotation #" value={header.quotation_number} />}
+            {rfqInfo && <InfoRow label="RFQ #" value={String(rfqInfo.rfq_number ?? '')} />}
+            {rfqInfo?.required_by_date && (
+              <InfoRow label="Required By" value={new Date(rfqInfo.required_by_date).toLocaleDateString('en-IN')} />
+            )}
+            {header && <InfoRow label="Deliver To" value={header.delivery_location} />}
+            {rfqInfo?.technical_specs && <InfoRow label="Tech Specs" value={rfqInfo.technical_specs} />}
+            {rfqInfo?.additional_notes && <InfoRow label="RFQ Notes" value={rfqInfo.additional_notes} />}
+          </div>
+          {header && (
+            <div className="mt-2">
+              <Badge variant={quotationStatusVariant(header.status)}>{header.status?.replace(/_/g, ' ')}</Badge>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Line items */}
+      <Card className="p-5">
+        <SectionTitle>Products &amp; Pricing</SectionTitle>
+        <div className="space-y-4">
+          {items.map((item) => (
+            <LineItem
+              key={item.id}
+              item={item}
+              form={forms[item.id] ?? makeItemForm(item)}
+              onChange={(patch) => updateForm(item.id, patch)}
+            />
+          ))}
+        </div>
+      </Card>
+
+      {/* Terms */}
+      <Card className="p-5">
+        <SectionTitle>Delivery &amp; Terms</SectionTitle>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <LField label="Expected Delivery Date">
+            <input type="date" value={terms.expected_delivery}
+              onChange={(e) => setTerms((t) => ({ ...t, expected_delivery: e.target.value }))}
+              className={iCls} />
+          </LField>
+          <LField label="Quotation Validity Until">
+            <input type="date" value={terms.valid_until}
+              onChange={(e) => setTerms((t) => ({ ...t, valid_until: e.target.value }))}
+              className={iCls} />
+          </LField>
+          <LField label="Delivery / Shipping Charges (₹)">
+            <input type="number" step="0.01" min="0"
+              value={terms.shipping_charge}
+              onChange={(e) => setTerms((t) => ({ ...t, shipping_charge: e.target.value }))}
+              className={iCls} placeholder="0.00" />
+          </LField>
+          <LField label="Payment Terms" hint="e.g. 100% advance / Net 30">
+            <input type="text" value={terms.payment_terms}
+              onChange={(e) => setTerms((t) => ({ ...t, payment_terms: e.target.value }))}
+              className={iCls} placeholder="e.g. 100% advance / Net 30" />
+          </LField>
+          <LField label="Return / Replacement Policy">
+            <input type="text" value={terms.return_terms}
+              onChange={(e) => setTerms((t) => ({ ...t, return_terms: e.target.value }))}
+              className={iCls} placeholder="e.g. 7-day replacement for manufacturing defects" />
+          </LField>
+          <LField label="Special Terms / Conditions">
+            <input type="text" value={terms.special_terms}
+              onChange={(e) => setTerms((t) => ({ ...t, special_terms: e.target.value }))}
+              className={iCls} placeholder="Any additional conditions" />
+          </LField>
+        </div>
+      </Card>
+
+      {/* Summary */}
+      <GrandSummary items={items} forms={forms} shipping={terms.shipping_charge} />
+
+      {/* Bottom actions */}
+      <div className="flex flex-wrap gap-3 pt-2 border-t border-[var(--border)]">
+        <Button variant="secondary" onClick={saveDraft} isLoading={saving} leftIcon={<Save size={14} />}>Save Draft</Button>
+        <Button onClick={sendQuotation} isLoading={sending} leftIcon={<Send size={14} />}>Send Quotation to Customer</Button>
+        <Button variant="ghost" onClick={onBack}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Group by quotation ───────────────────────────────────────────────────────
+function groupByQuotation(items: VendorRequest[]) {
+  const m = new Map<number, VendorRequest[]>();
+  items.forEach((it) => {
+    const arr = m.get(it.quotation) ?? [];
+    arr.push(it);
+    m.set(it.quotation, arr);
+  });
+  return m;
+}
+
+// ─── Quotation group card (list view) ─────────────────────────────────────────
+function QuotationGroup({
+  quotationId,
+  items,
+  onOpenBuilder,
+}: {
+  quotationId: number;
+  items: VendorRequest[];
+  onOpenBuilder: (id: number, items: VendorRequest[]) => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const first     = items[0];
+  const allQuoted = items.every((i) => Number(i.unit_price) > 0);
+  const anyQuoted = items.some((i) => Number(i.unit_price) > 0);
+
+  return (
+    <div className="border border-[var(--border)] rounded-xl overflow-hidden">
+      {/* Group header */}
+      <div
+        role="button" tabIndex={0}
+        onClick={() => setExpanded((e) => !e)}
+        onKeyDown={(e) => e.key === 'Enter' && setExpanded((p) => !p)}
+        className="flex flex-wrap items-center gap-4 p-4 cursor-pointer bg-[var(--background-alt)] hover:bg-[var(--surface-hover)] transition-colors"
+      >
+        <div className="flex-1 min-w-[180px]">
+          <p className="font-bold text-[var(--text)]">{first.quotation_number}</p>
+          <p className="text-xs text-[var(--text-muted)]">RFQ: {first.rfq_number} · {items.length} item{items.length !== 1 ? 's' : ''}</p>
+          {first.delivery_location && <p className="text-xs text-[var(--text-muted)]">📍 {first.delivery_location}</p>}
+        </div>
+        {first.required_by_date && (
+          <div className="hidden sm:block text-center">
+            <p className="text-xs text-[var(--text-muted)]">Required By</p>
+            <p className="text-sm font-medium text-[var(--text)]">{new Date(first.required_by_date).toLocaleDateString('en-IN')}</p>
+          </div>
+        )}
+        <Badge variant={quotationStatusVariant(first.quotation_status)}>{first.quotation_status?.replace(/_/g, ' ')}</Badge>
+        <Badge variant={allQuoted ? 'success' : anyQuoted ? 'warning' : 'default'}>
+          {allQuoted ? '✓ All Quoted' : anyQuoted ? 'Partial' : 'Not Started'}
+        </Badge>
+        <Button
+          size="sm"
+          leftIcon={allQuoted ? <Pencil size={13} /> : <Send size={13} />}
+          onClick={(e) => { e.stopPropagation(); onOpenBuilder(quotationId, items); }}
+        >
+          {allQuoted ? 'Edit Quotation' : 'Open Builder'}
+        </Button>
+        <div className="ml-auto text-[var(--text-muted)]">{expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+      </div>
+
+      {/* Expanded product rows */}
+      {expanded && (
+        <div className="divide-y divide-[var(--border)]">
+          {items.map((it) => {
+            const quoted = Number(it.unit_price) > 0;
+            return (
+              <div key={it.id} className="flex flex-wrap items-center gap-4 p-4 hover:bg-[var(--surface-hover)] transition-colors">
+                <div className="flex-1 min-w-[180px]">
+                  <p className="font-semibold text-sm text-[var(--text)]">{it.product_name}</p>
+                  <p className="text-xs text-[var(--text-muted)]">{it.rfq_number} · {it.quotation_number}</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-[var(--text-muted)]">Qty</p>
+                  <p className="font-bold text-[var(--text)]">{it.quantity}</p>
+                </div>
+                {quoted && (
+                  <div className="text-center">
+                    <p className="text-xs text-[var(--text-muted)]">Your Price</p>
+                    <p className="text-sm font-bold text-[var(--primary)]">
+                      ₹{Number(it.unit_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                )}
+                <Badge variant={quoted ? 'success' : 'warning'}>{quoted ? '✓ Quoted' : 'Pending'}</Badge>
+                <Button size="sm" variant={quoted ? 'secondary' : 'primary'}
+                  leftIcon={quoted ? <Pencil size={13} /> : <Send size={13} />}
+                  onClick={() => onOpenBuilder(quotationId, items)}>
+                  {quoted ? 'Edit' : 'Quote'}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VendorRequests Page ───────────────────────────────────────────────────────
+export function VendorRequests() {
+  const [items,   setItems]   = React.useState<VendorRequest[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error,   setError]   = React.useState('');
+  const [filter,  setFilter]  = React.useState('');
+  const [builder, setBuilder] = React.useState<{ quotationId: number; items: VendorRequest[] } | null>(null);
+
+  const load = React.useCallback(() => {
+    setLoading(true); setError('');
+    const qs = filter ? `?status=${encodeURIComponent(filter)}` : '';
+    api.get<VendorRequest[] | { results: VendorRequest[] }>(`/quotations/vendor/requests/${qs}`)
+      .then((res) => setItems(Array.isArray(res) ? res : (res.results ?? [])))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Unable to load requests.'))
+      .finally(() => setLoading(false));
+  }, [filter]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const mergeItems = (updated: VendorRequest[]) => {
+    setItems((prev) => {
+      const map = new Map(prev.map((i) => [i.id, i]));
+      updated.forEach((u) => map.set(u.id, u));
+      return Array.from(map.values());
+    });
+  };
+
+  if (builder) {
+    return (
+      <Guard>
+        <Shell active="Dealer Requests">
+          <VendorQuotationBuilder
+            quotationId={builder.quotationId}
+            initialItems={builder.items}
+            onBack={() => setBuilder(null)}
+            onSaved={(updated) => { mergeItems(updated); setBuilder(null); }}
+          />
+        </Shell>
+      </Guard>
+    );
+  }
+
+  const grouped   = groupByQuotation(items);
+  const pending   = items.filter((i) => !Number(i.unit_price));
+  const responded = items.filter((i) => !!Number(i.unit_price));
+
+  return (
+    <Guard>
+      <Shell active="Dealer Requests">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-[var(--text)]">Dealer / RFQ Requests</h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              Quotation items assigned to your business. Open the builder to price, add terms, and send.
+            </p>
+          </div>
+          <div className="flex gap-2 items-center">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="h-9 rounded-lg border border-[var(--border)] bg-[var(--background-card)] px-3 text-sm text-[var(--text)] focus:border-[var(--primary)] outline-none"
+              aria-label="Filter by status"
+            >
+              <option value="">All Statuses</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="viewed">Viewed</option>
+              <option value="negotiating">Negotiating</option>
+              <option value="accepted">Accepted</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <Button size="sm" variant="ghost" onClick={load}>↺ Refresh</Button>
+          </div>
+        </div>
+
+        {!loading && items.length > 0 && (
+          <div className="mb-5 grid grid-cols-3 gap-3">
+            {[
+              { label: 'Total Assigned',   value: items.length,     color: 'text-[var(--primary)]' },
+              { label: 'Pending Response', value: pending.length,   color: 'text-amber-500' },
+              { label: 'Responded',        value: responded.length, color: 'text-green-600' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="rounded-xl border border-[var(--border)] bg-[var(--background-card)] p-3 text-center">
+                <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-5 flex items-center gap-2 rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700">
+            <AlertCircle size={16} />{error}
+          </div>
+        )}
+
+        {loading && (
+          <div className="py-16 text-center text-sm text-[var(--text-muted)]">
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-[var(--primary)] border-t-transparent" />
+            Loading assigned requests…
+          </div>
+        )}
+
+        {!loading && !error && items.length === 0 && (
+          <Card className="py-20 text-center">
+            <CalendarClock className="mx-auto mb-4 text-[var(--text-muted)]" size={36} />
+            <p className="font-semibold text-[var(--text)]">No requests assigned yet</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              When the admin assigns you to a customer RFQ, it will appear here.
+            </p>
+          </Card>
+        )}
+
+        {!loading && grouped.size > 0 && (
+          <div className="space-y-4">
+            {Array.from(grouped.entries()).map(([qId, qItems]) => (
+              <QuotationGroup
+                key={qId}
+                quotationId={qId}
+                items={qItems}
+                onOpenBuilder={(id, its) => setBuilder({ quotationId: id, items: its })}
+              />
+            ))}
+          </div>
+        )}
+      </Shell>
+    </Guard>
+  );
+}
+

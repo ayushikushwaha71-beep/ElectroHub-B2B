@@ -5,7 +5,6 @@
  * Lists all quotations received by the customer and allows viewing details.
  *
  * Uses ONLY existing ElectroHub design tokens and components.
- * No backend calls — localStorage mock state only.
  */
 
 import * as React from 'react';
@@ -31,21 +30,12 @@ import { Badge }  from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input }  from '@/components/ui/Input';
 import { QuotationDetail, QUOT_STATUS_CONFIG } from './QuotationDetail';
-import {
-  getStoredQuotations,
-  saveQuotations,
-  updateQuotation,
-  addNegotiationEntry,
-  calcQuotationTotals,
-  type MockQuotation,
-  type MockQuotationStatus,
-} from './mockQuotations';
-import { createOrderFromQuotation } from './mockOrders';
-import type { AccountSection } from './AccountDashboard';
+import type { AccountSection } from '@/components/account/AccountDashboard';
+import { customerQuotationApi, Quotation, QuotationStatus } from '@/lib/quotation-api';
 
 // ─── Filter tabs ──────────────────────────────────────────────────────────────
 
-const FILTER_TABS: { label: string; value: MockQuotationStatus | 'all' }[] = [
+const FILTER_TABS: { label: string; value: QuotationStatus | 'all' }[] = [
   { label: 'All',               value: 'all'               },
   { label: 'New',               value: 'sent'              },
   { label: 'Negotiating',       value: 'negotiating'       },
@@ -63,26 +53,27 @@ function QuotationCard({
   index,
   onClick,
 }: {
-  quotation: MockQuotation;
+  quotation: Quotation;
   index:     number;
   onClick:   () => void;
 }) {
   const statusCfg  = QUOT_STATUS_CONFIG[quotation.status];
   const StatusIcon = statusCfg.icon;
-  const totals     = calcQuotationTotals(quotation);
 
-  const sentDate = new Date(quotation.sentAt).toLocaleDateString('en-IN', {
+  const sentAt = quotation.sent_at || quotation.created_at;
+  const sentDate = sentAt ? new Date(sentAt).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
-  });
-  const validDate = quotation.validUntil
-    ? new Date(quotation.validUntil).toLocaleDateString('en-IN', {
+  }) : '—';
+  
+  const validDate = quotation.valid_until
+    ? new Date(quotation.valid_until).toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric',
       })
     : '—';
 
   const isNew        = quotation.status === 'sent';
-  const daysLeft     = quotation.validUntil
-    ? Math.ceil((new Date(quotation.validUntil).getTime() - Date.now()) / 86400000)
+  const daysLeft     = quotation.valid_until
+    ? Math.ceil((new Date(quotation.valid_until).getTime() - Date.now()) / 86400000)
     : null;
   const isExpiring   = daysLeft !== null && daysLeft >= 0 && daysLeft <= 3;
   const isExpired    = daysLeft !== null && daysLeft < 0;
@@ -113,7 +104,7 @@ function QuotationCard({
             <span className="h-2 w-2 rounded-full bg-[var(--primary)] animate-pulse shrink-0" />
           )}
           <span className="font-mono font-semibold text-sm text-[var(--text)] shrink-0">
-            {quotation.quotationNumber}
+            {quotation.quotation_number}
           </span>
           <Badge variant={statusCfg.variant} size="xs" icon={<StatusIcon size={10} />}>
             {statusCfg.label}
@@ -141,9 +132,9 @@ function QuotationCard({
         {/* Icon */}
         <div className={cn(
           'w-12 h-12 rounded-xl flex items-center justify-center shrink-0',
-          quotation.productType === 'existing' ? 'bg-blue-500/10' : 'bg-violet-500/10',
+          quotation.product_type === 'existing' ? 'bg-blue-500/10' : 'bg-violet-500/10',
         )}>
-          {quotation.productType === 'existing'
+          {quotation.product_type === 'existing'
             ? <Package size={20} className="text-blue-500" />
             : <Sparkles size={20} className="text-violet-500" />
           }
@@ -152,7 +143,7 @@ function QuotationCard({
         {/* Main info */}
         <div className="flex-1 min-w-0">
           <p className="font-medium text-sm text-[var(--text)] line-clamp-1 mb-1.5">
-            {quotation.productName}
+            {quotation.product_name}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
@@ -161,9 +152,9 @@ function QuotationCard({
             </span>
             <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
               <Receipt size={11} />
-              Total: <strong className="text-[var(--text)]">{fmtINR(totals.grandTotal)}</strong>
+              Total: <strong className="text-[var(--text)]">{fmtINR(quotation.grand_total || 0)}</strong>
             </span>
-            {quotation.validUntil && !isExpired && (
+            {quotation.valid_until && !isExpired && (
               <span className={cn(
                 'text-xs flex items-center gap-1',
                 isExpiring ? 'text-amber-500' : 'text-[var(--text-muted)]',
@@ -172,7 +163,7 @@ function QuotationCard({
                 Valid until: <strong>{validDate}</strong>
               </span>
             )}
-            {quotation.negotiations.length > 0 && (
+            {quotation.negotiations && quotation.negotiations.length > 0 && (
               <span className="text-xs text-[var(--primary)] flex items-center gap-1">
                 <MessageSquare size={11} />
                 {quotation.negotiations.length} negotiation{quotation.negotiations.length !== 1 ? 's' : ''}
@@ -206,15 +197,27 @@ export function AccountQuotations({
   onSectionChange?: (section: AccountSection) => void;
 }) {
   const { user } = useAuth();
-  const [quotations, setQuotations]     = React.useState<MockQuotation[]>([]);
-  const [selected, setSelected]         = React.useState<MockQuotation | null>(null);
+  const [quotations, setQuotations]     = React.useState<Quotation[]>([]);
+  const [selected, setSelected]         = React.useState<Quotation | null>(null);
   const [search, setSearch]             = React.useState('');
-  const [activeFilter, setFilter]       = React.useState<MockQuotationStatus | 'all'>('all');
+  const [activeFilter, setFilter]       = React.useState<QuotationStatus | 'all'>('all');
 
-  // Load from localStorage
-  React.useEffect(() => {
-    if (user?.id) setQuotations(getStoredQuotations(user.id));
+  const loadQuotations = React.useCallback(() => {
+    if (!user?.id) return;
+    customerQuotationApi.listQuotations()
+      .then((records: any) => {
+        const items = Array.isArray(records) ? records : (records.results ?? []);
+        setQuotations(items);
+      })
+      .catch(() => {
+        setQuotations([]);
+      });
   }, [user?.id]);
+
+  // Load from real API
+  React.useEffect(() => {
+    loadQuotations();
+  }, [loadQuotations]);
 
   // Re-sync selected quotation when quotations array changes
   React.useEffect(() => {
@@ -225,55 +228,55 @@ export function AccountQuotations({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quotations]);
 
-  const handleStatusChange = (status: MockQuotationStatus) => {
+  const handleStatusChange = async (status: QuotationStatus) => {
     if (!user?.id || !selected) return;
-    const next = updateQuotation(user.id, selected.id, { status });
-    setQuotations(next);
+    try {
+      if (status === 'accepted') {
+        await customerQuotationApi.acceptQuotation(Number(selected.id));
+      } else if (status === 'rejected') {
+        await customerQuotationApi.rejectQuotation(Number(selected.id));
+      } else if (status === 'viewed') {
+        // Just update locally if backend doesn't track viewed
+        setQuotations((prev) => prev.map((q) => q.id === selected.id ? { ...q, status: 'viewed' } : q));
+        return;
+      }
+      loadQuotations();
+    } catch (e) {
+      console.error('Status change error', e);
+    }
   };
 
-  const handleAddNegotiation = (proposedPrice: number, message: string) => {
+  const handleAddNegotiation = async (proposedPrice: number, message: string) => {
     if (!user?.id || !selected) return;
-    const next = addNegotiationEntry(user.id, selected.id, {
-      by: 'customer',
-      proposedPrice,
-      message,
-    });
-    setQuotations(next);
+    try {
+      await customerQuotationApi.negotiateQuotation(Number(selected.id), proposedPrice, message);
+      loadQuotations();
+    } catch (e) {
+      console.error('Negotiation error', e);
+    }
   };
 
-  const handlePaymentSubmit = (_utr: string) => {
-    // Status already transitioned to payment_confirmed via onStatusChange in QuotationDetail.
-    // Now auto-create a linked B2B order in mockOrders so it appears in Account > Orders.
+  const handlePaymentSubmit = async (amount: number, utr: string) => {
     if (!user?.id || !selected) return;
-    // Derive grand total from quotation fields
-    const sub      = selected.quantity * selected.unitPrice;
-    const disc     = sub * (selected.discountPct / 100);
-    const taxable  = sub - disc;
-    const taxTotal = taxable * (selected.taxPct / 100);
-    const grand    = taxable + taxTotal + selected.shippingCharge;
-
-    createOrderFromQuotation({
-      userId:           user.id,
-      quotationId:      selected.id,
-      quotationNumber:  selected.quotationNumber,
-      productName:      selected.productName,
-      quantity:         selected.quantity,
-      grandTotal:       grand,
-      deliveryLocation: selected.deliveryLocation,
-      expectedDelivery: selected.expectedDelivery,
-      unitPrice:        selected.unitPrice,
-      discountPct:      selected.discountPct,
-      taxPct:           selected.taxPct,
-      shippingCharge:   selected.shippingCharge,
-    });
+    try {
+      await customerQuotationApi.submitPayment(Number(selected.id), {
+        amount,
+        payment_method: 'bank_transfer',
+        utr_reference: utr,
+        payment_date: new Date().toISOString().split('T')[0],
+      });
+      loadQuotations();
+    } catch (e) {
+      console.error('Payment submit error', e);
+    }
   };
 
   // Filtering
   const filtered = quotations.filter((q) => {
     const matchSearch =
-      q.quotationNumber.toLowerCase().includes(search.toLowerCase()) ||
-      q.rfqNumber.toLowerCase().includes(search.toLowerCase()) ||
-      q.productName.toLowerCase().includes(search.toLowerCase());
+      (q.quotation_number || '').toLowerCase().includes(search.toLowerCase()) ||
+      (q.rfq_number || '').toLowerCase().includes(search.toLowerCase()) ||
+      (q.product_name || '').toLowerCase().includes(search.toLowerCase());
     const matchFilter = activeFilter === 'all' || q.status === activeFilter;
     return matchSearch && matchFilter;
   });

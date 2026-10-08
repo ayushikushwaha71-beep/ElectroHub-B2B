@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'cart',
     'orders',
     'vendors',
+    'quotations',
 ]
 
 MIDDLEWARE = [
@@ -69,13 +70,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'electrohub_backend.wsgi.application'
 
 # ─── Database ────────────────────────────────────────────────────────────────
-# Using SQLite for development. Switch to PostgreSQL in production.
+# SQLite (default for development).
+# To switch to PostgreSQL: pip install psycopg2-binary, then swap the block below.
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+# ── PostgreSQL (production-ready config — swap DATABASES above with this) ──
+# import os
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME':     os.environ.get('DB_NAME',     'electrohub'),
+#         'USER':     os.environ.get('DB_USER',     'postgres'),
+#         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+#         'HOST':     os.environ.get('DB_HOST',     'localhost'),
+#         'PORT':     os.environ.get('DB_PORT',     '5432'),
+#         'OPTIONS':  {'sslmode': os.environ.get('DB_SSLMODE', 'prefer')},
+#     }
+# }
 
 # ─── Custom User ─────────────────────────────────────────────────────────────
 AUTH_USER_MODEL = 'accounts.CustomUser'
@@ -108,7 +124,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
 ]
-CORS_ALLOW_ALL_ORIGINS = True  # Dev only
+CORS_ALLOW_ALL_ORIGINS = False  # Dev only
 CORS_ALLOW_CREDENTIALS = True
 
 # ─── Django REST Framework ────────────────────────────────────────────────────

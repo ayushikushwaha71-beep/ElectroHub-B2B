@@ -44,6 +44,8 @@ import { Input }  from '@/components/ui/Input';
 import { Card }   from '@/components/ui/Card';
 import { toast }  from '@/components/ui/Toast';
 import { AdminQuotationBuilder } from './AdminQuotationBuilder';
+import { adminQuotationApi } from '@/lib/quotation-api';
+import type { RFQ as ApiRFQ } from '@/lib/quotation-api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -115,144 +117,6 @@ const FILTER_TABS: { label: string; value: AdminRFQStatus | 'all' }[] = [
   { label: 'Accepted',        value: 'accepted'     },
   { label: 'Rejected',        value: 'rejected'     },
   { label: 'Order Placed',    value: 'order_placed' },
-];
-
-// ─── Seed data ────────────────────────────────────────────────────────────────
-
-const SEED_RFQS: AdminRFQRow[] = [
-  {
-    id:          'arfq-001',
-    rfqNumber:   'RFQ-2026-000312',
-    customer:    { name: 'Aarav Sharma',   email: 'aarav.sharma@nexgentech.in',  phone: '9876543210', company: 'NexGen Technologies Pvt. Ltd.' },
-    productType: 'existing',
-    productName: 'STM32F407VGT6 ARM Cortex-M4 Microcontroller',
-    existingProductId: 'mc-001',
-    quantity:    50,
-    requiredByDate: '2026-09-15',
-    deliveryLocation: 'Bengaluru, Karnataka 560034',
-    budget:      '75000',
-    technicalSpecs:
-      'STM32F407VGT6, 168 MHz Cortex-M4, 1 MB Flash, 192 KB SRAM. ' +
-      'Must support FPU, 3× SPI, 3× I2C, 4× USART, USB OTG FS/HS. ' +
-      'Industrial temp range –40°C to +85°C. AEC-Q100 preferred.',
-    additionalNotes: 'Bulk packaging preferred. Certificate of conformance required.',
-    status:      'under_review',
-    submittedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
-    updatedAt:   new Date(Date.now() - 1 * 86400000).toISOString(),
-    inventory:   { available: 120, reserved: 20, incoming: 300, eta: '2026-09-02' },
-  },
-  {
-    id:          'arfq-002',
-    rfqNumber:   'RFQ-2026-000287',
-    customer:    { name: 'Meera Nair',     email: 'meera@industrialpulse.co',   phone: '9988776655', company: 'Industrial Pulse Solutions' },
-    productType: 'custom',
-    productName: '48V 20A DC Power Supply (Industrial Grade)',
-    referenceUrl: 'https://meanwell.com/productSeries.aspx?i=437',
-    quantity:    10,
-    requiredByDate: '2026-10-01',
-    deliveryLocation: 'Pune, Maharashtra 411001',
-    budget:      '120000',
-    technicalSpecs:
-      'Input: 90–264 VAC universal. Output: 48 VDC ±1%, 20 A max. ' +
-      'Efficiency ≥92%. OVP, OCP, SCP protection. DIN rail mount. CE/UL certified.',
-    additionalNotes: 'Prefer Mean Well or equivalent tier-1 brand.',
-    status:      'submitted',
-    submittedAt: new Date(Date.now() - 6 * 3600000).toISOString(),
-    updatedAt:   new Date(Date.now() - 6 * 3600000).toISOString(),
-  },
-  {
-    id:          'arfq-003',
-    rfqNumber:   'RFQ-2026-000253',
-    customer:    { name: 'Rahul Verma',    email: 'rahul.v@circuitcraft.io',    phone: '9123456780', company: 'CircuitCraft Design Studio' },
-    productType: 'custom',
-    productName: 'Custom 2-layer PCB Fabrication (100 × 80 mm)',
-    quantity:    200,
-    requiredByDate: '2026-08-30',
-    deliveryLocation: 'Hyderabad, Telangana 500032',
-    budget:      '15000',
-    technicalSpecs:
-      'FR4, 1.6 mm thickness, HASL finish. 2 layers, min trace/space 0.15/0.15 mm. ' +
-      'Min drill 0.3 mm. Solder mask both sides (green). Silkscreen top only.',
-    additionalNotes: 'Gerber files shared after RFQ confirmation.',
-    status:      'quoted',
-    submittedAt: new Date(Date.now() - 10 * 86400000).toISOString(),
-    updatedAt:   new Date(Date.now() - 4 * 86400000).toISOString(),
-  },
-  {
-    id:          'arfq-004',
-    rfqNumber:   'RFQ-2026-000198',
-    customer:    { name: 'Ishita Kapoor',  email: 'ishita@kapoorbots.com',     phone: '9870001234', company: 'Kapoor Robotics Labs' },
-    productType: 'existing',
-    productName: 'Raspberry Pi 4 Model B (4 GB RAM)',
-    existingProductId: 'rpi-001',
-    quantity:    25,
-    requiredByDate: '2026-07-20',
-    deliveryLocation: 'Chennai, Tamil Nadu 600001',
-    budget:      '140000',
-    technicalSpecs: 'Standard unit with 4 GB RAM. Official PSU required. No custom firmware needed.',
-    additionalNotes: 'B2B invoice required with GST.',
-    status:      'order_placed',
-    submittedAt: new Date(Date.now() - 25 * 86400000).toISOString(),
-    updatedAt:   new Date(Date.now() - 12 * 86400000).toISOString(),
-    inventory:   { available: 43, reserved: 25, incoming: 0 },
-  },
-  {
-    id:          'arfq-005',
-    rfqNumber:   'RFQ-2026-000167',
-    customer:    { name: 'Nikhil Singh',   email: 'n.singh@smartenergy.net',   phone: '9456123789', company: 'SmartEnergy Systems' },
-    productType: 'custom',
-    productName: 'Hall Effect Current Sensor Module (200 A)',
-    quantity:    30,
-    requiredByDate: '2026-08-10',
-    deliveryLocation: 'Mumbai, Maharashtra 400001',
-    budget:      '45000',
-    technicalSpecs:
-      'Measurement range ±200 A. Output: analog 0–5 V or I2C. ' +
-      'Accuracy ±1%. Supply voltage 5 V. Isolated measurement.',
-    additionalNotes: '',
-    status:      'rejected',
-    submittedAt: new Date(Date.now() - 18 * 86400000).toISOString(),
-    updatedAt:   new Date(Date.now() - 10 * 86400000).toISOString(),
-  },
-  {
-    id:          'arfq-006',
-    rfqNumber:   'RFQ-2026-000341',
-    customer:    { name: 'Priya Menon',    email: 'priya@iotedge.co.in',       phone: '9901234567', company: 'IoT Edge Solutions' },
-    productType: 'existing',
-    productName: 'ESP32-WROOM-32D Module',
-    existingProductId: 'esp-002',
-    quantity:    500,
-    requiredByDate: '2026-09-30',
-    deliveryLocation: 'Kochi, Kerala 682001',
-    budget:      '90000',
-    technicalSpecs:
-      'ESP32-D0WD-V3 chip, 4 MB Flash, 520 KB SRAM. ' +
-      'Wi-Fi 802.11 b/g/n + Bluetooth 4.2. PCB antenna. SMD/reflow compatible.',
-    additionalNotes: 'Tape-and-reel packaging required for automated assembly.',
-    status:      'submitted',
-    submittedAt: new Date(Date.now() - 2 * 3600000).toISOString(),
-    updatedAt:   new Date(Date.now() - 2 * 3600000).toISOString(),
-    inventory:   { available: 850, reserved: 0, incoming: 2000, eta: '2026-09-05' },
-  },
-  {
-    id:          'arfq-007',
-    rfqNumber:   'RFQ-2026-000328',
-    customer:    { name: 'Kiran Reddy',    email: 'kiran.r@embeddedworks.in',  phone: '9322987654', company: 'EmbeddedWorks India' },
-    productType: 'custom',
-    productName: '5V/10A Switching Power Module with Buck Converter',
-    referenceUrl: 'https://example.com/buck-converter-5v10a',
-    quantity:    100,
-    requiredByDate: '2026-09-20',
-    deliveryLocation: 'Bengaluru, Karnataka 560001',
-    budget:      '55000',
-    technicalSpecs:
-      'Input: 7–35 V DC. Output: 5 V ±0.5%, 10 A continuous. ' +
-      'Efficiency ≥93%. Thermal overload protection. Compact footprint ≤50×30 mm.',
-    additionalNotes: 'EMI compliance required for export. CE mark preferred.',
-    status:      'accepted',
-    submittedAt: new Date(Date.now() - 14 * 86400000).toISOString(),
-    updatedAt:   new Date(Date.now() - 5 * 86400000).toISOString(),
-  },
 ];
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
@@ -383,7 +247,7 @@ function RFQDetailPanel({
       </div>
 
       {/* ── Action bar ── */}
-      {(canMarkUnderReview || canProceedToQuote || canReject) && (
+      {(canMarkUnderReview || canProceedToQuote || canReject || rfq.status === 'quoted') && (
         <div className={cn(
           'flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border',
           'bg-[var(--background-alt)] border-[var(--border)]',
@@ -646,23 +510,66 @@ function RFQDetailPanel({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function AdminRFQs() {
-  const [rfqs, setRFQs]              = React.useState<AdminRFQRow[]>(SEED_RFQS);
+  const [rfqs, setRFQs]              = React.useState<AdminRFQRow[]>([]);
+  const [isLoading, setIsLoading]    = React.useState(false);
   const [selectedId, setSelectedId]  = React.useState<string | null>(null);
   const [quotationRFQ, setQuotationRFQ] = React.useState<AdminRFQRow | null>(null);
   const [search, setSearch]          = React.useState('');
   const [activeFilter, setFilter]    = React.useState<AdminRFQStatus | 'all'>('all');
 
+  // Map Django RFQ → AdminRFQRow
+  function mapApiRFQ(r: ApiRFQ): AdminRFQRow {
+    return {
+      id:               String(r.id),
+      rfqNumber:        r.rfq_number,
+      customer:         { name: r.customer_name, email: r.customer_email, phone: r.customer_phone ?? '' },
+      productType:      r.product_type,
+      productName:      r.product_name,
+      existingProductId:r.product ? String(r.product) : undefined,
+      referenceUrl:     r.reference_url || undefined,
+      quantity:         r.quantity,
+      requiredByDate:   r.required_by_date,
+      deliveryLocation: r.delivery_location,
+      budget:           r.budget ?? '',
+      technicalSpecs:   r.technical_specs,
+      additionalNotes:  r.additional_notes,
+      status:           r.status as AdminRFQStatus,
+      submittedAt:      r.submitted_at,
+      updatedAt:        r.updated_at,
+    };
+  }
+
+  // Load from real API
+  React.useEffect(() => {
+    setIsLoading(true);
+    adminQuotationApi.listRFQs()
+      .then((res) => {
+        const records = Array.isArray(res) ? res : ((res as { results?: ApiRFQ[] }).results ?? []);
+        setRFQs(records.map(mapApiRFQ));
+      })
+      .catch(() => {
+        toast.error('Failed to load RFQs. Check your connection.');
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
+
   const selectedRFQ = rfqs.find((r) => r.id === selectedId) ?? null;
 
-  const handleStatusChange = (id: string, status: AdminRFQStatus) => {
-    setRFQs((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? { ...r, status, updatedAt: new Date().toISOString() }
-          : r,
-      ),
-    );
+  const handleStatusChange = async (id: string, status: AdminRFQStatus) => {
+    try {
+      await adminQuotationApi.updateRFQStatus(Number(id), status);
+      setRFQs((prev) =>
+        prev.map((r) =>
+          r.id === id
+            ? { ...r, status, updatedAt: new Date().toISOString() }
+            : r,
+        ),
+      );
+    } catch {
+      toast.error('Failed to update RFQ status.');
+    }
   };
+
 
   const handleBuildQuotation = (rfq: AdminRFQRow) => {
     setQuotationRFQ(rfq);

@@ -29,12 +29,13 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { RFQDetail, RFQ_STATUS_CONFIG } from './RFQDetail';
-import { getStoredRFQs, type MockRFQ, type MockRFQStatus } from './mockRFQs';
-import type { AccountSection } from './AccountDashboard';
+import { customerQuotationApi, type RFQ, type RFQStatus } from '@/lib/quotation-api';
+import type { AccountSection } from '@/components/account/AccountDashboard';
+import { RFQFormModal } from './RFQFormModal';
 
 // ─── Filter tabs ──────────────────────────────────────────────────────────────
 
-const FILTER_TABS: { label: string; value: MockRFQStatus | 'all' }[] = [
+const FILTER_TABS: { label: string; value: RFQStatus | 'all' }[] = [
   { label: 'All',              value: 'all'            },
   { label: 'Under Review',     value: 'under_review'   },
   { label: 'Quotation Ready',  value: 'quoted'         },
@@ -50,18 +51,18 @@ function RFQCard({
   index,
   onClick,
 }: {
-  rfq:    MockRFQ;
+  rfq:    RFQ;
   index:  number;
   onClick: () => void;
 }) {
-  const statusCfg  = RFQ_STATUS_CONFIG[rfq.status];
+  const statusCfg  = RFQ_STATUS_CONFIG[rfq.status] || RFQ_STATUS_CONFIG.submitted;
   const StatusIcon = statusCfg.icon;
 
-  const submittedDate = new Date(rfq.submittedAt).toLocaleDateString('en-IN', {
+  const submittedDate = new Date(rfq.submitted_at).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
   });
-  const requiredDate = rfq.requiredByDate
-    ? new Date(rfq.requiredByDate).toLocaleDateString('en-IN', {
+  const requiredDate = rfq.required_by_date
+    ? new Date(rfq.required_by_date).toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric',
       })
     : '—';
@@ -79,12 +80,12 @@ function RFQCard({
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border)] bg-[var(--background-alt)]">
         <div className="flex items-center gap-3 flex-wrap min-w-0">
           <span className="font-mono font-semibold text-sm text-[var(--text)] shrink-0">
-            {rfq.rfqNumber}
+            {rfq.rfq_number}
           </span>
           <Badge variant={statusCfg.variant} size="xs" icon={<StatusIcon size={10} />}>
             {statusCfg.label}
           </Badge>
-          {rfq.productType === 'custom' && (
+          {rfq.product_type === 'custom' && (
             <Badge variant="info" size="xs" icon={<Sparkles size={9} />}>
               Custom
             </Badge>
@@ -104,11 +105,11 @@ function RFQCard({
         {/* Icon */}
         <div className={cn(
           'w-12 h-12 rounded-xl flex items-center justify-center shrink-0',
-          rfq.productType === 'existing'
+          rfq.product_type === 'existing'
             ? 'bg-blue-500/10'
             : 'bg-violet-500/10',
         )}>
-          {rfq.productType === 'existing'
+          {rfq.product_type === 'existing'
             ? <Package size={20} className="text-blue-500" />
             : <Sparkles size={20} className="text-violet-500" />
           }
@@ -117,7 +118,7 @@ function RFQCard({
         {/* Main info */}
         <div className="flex-1 min-w-0">
           <p className="font-medium text-sm text-[var(--text)] line-clamp-1">
-            {rfq.productName}
+            {rfq.product_name || rfq.custom_product_name || 'Unknown Product'}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
             <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
@@ -128,7 +129,7 @@ function RFQCard({
               <CalendarDays size={11} />
               Required by: <strong className="text-[var(--text)]">{requiredDate}</strong>
             </span>
-            {rfq.referenceUrl && (
+            {rfq.reference_url && (
               <span className="text-xs text-[var(--primary)] flex items-center gap-1">
                 <Link2 size={11} />
                 Reference URL
@@ -163,21 +164,39 @@ function RFQCard({
 
 export function AccountRFQs({ onSectionChange }: { onSectionChange?: (section: AccountSection) => void }) {
   const { user } = useAuth();
-  const [rfqs, setRFQs]              = React.useState<MockRFQ[]>([]);
-  const [selectedRFQ, setSelected]   = React.useState<MockRFQ | null>(null);
+  const [rfqs, setRFQs]              = React.useState<RFQ[]>([]);
+  const [selectedRFQ, setSelected]   = React.useState<RFQ | null>(null);
   const [search, setSearch]          = React.useState('');
-  const [activeFilter, setFilter]    = React.useState<MockRFQStatus | 'all'>('all');
+  const [activeFilter, setFilter]    = React.useState<RFQStatus | 'all'>('all');
+  const [loading, setLoading]        = React.useState(true);
+  const [isModalOpen, setModalOpen]  = React.useState(false);
 
-  // Load from localStorage
+  // Load from real API
   React.useEffect(() => {
-    if (user?.id) setRFQs(getStoredRFQs(user.id));
+    if (!user?.id) return;
+    setLoading(true);
+    customerQuotationApi.listRFQs()
+      .then((data: any) => {
+        let items: RFQ[] = [];
+        if (Array.isArray(data)) {
+          items = data;
+        } else if (data && Array.isArray(data.results)) {
+          items = data.results;
+        } else if (data && Array.isArray(data.data)) {
+          items = data.data;
+        }
+        setRFQs(items);
+      })
+      .catch(() => setRFQs([]))
+      .finally(() => setLoading(false));
   }, [user?.id]);
 
   // Filtering
   const filtered = rfqs.filter((r) => {
+    const productName = r.product_name || r.custom_product_name || 'Unknown Product';
     const matchSearch =
-      r.rfqNumber.toLowerCase().includes(search.toLowerCase()) ||
-      r.productName.toLowerCase().includes(search.toLowerCase());
+      r.rfq_number.toLowerCase().includes(search.toLowerCase()) ||
+      productName.toLowerCase().includes(search.toLowerCase());
     const matchFilter = activeFilter === 'all' || r.status === activeFilter;
     return matchSearch && matchFilter;
   });
@@ -223,11 +242,9 @@ export function AccountRFQs({ onSectionChange }: { onSectionChange?: (section: A
               id="rfqs-search"
             />
           </div>
-          <Link href="/rfq">
-            <Button variant="primary" size="sm" leftIcon={<FileText size={14} />} id="rfqs-new-request">
-              New RFQ
-            </Button>
-          </Link>
+          <Button onClick={() => setModalOpen(true)} variant="primary" size="sm" leftIcon={<FileText size={14} />} id="rfqs-new-request">
+            New RFQ
+          </Button>
         </div>
       </div>
 
@@ -281,11 +298,9 @@ export function AccountRFQs({ onSectionChange }: { onSectionChange?: (section: A
               : 'Submit a Request For Quotation to get bulk pricing from our team.'}
           </p>
           {!search && activeFilter === 'all' && (
-            <Link href="/rfq">
-              <Button variant="primary" size="sm" leftIcon={<FileText size={14} />}>
-                Submit Your First RFQ
-              </Button>
-            </Link>
+            <Button onClick={() => setModalOpen(true)} variant="primary" size="sm" leftIcon={<FileText size={14} />}>
+              Submit Your First RFQ
+            </Button>
           )}
         </div>
       ) : (
@@ -302,6 +317,16 @@ export function AccountRFQs({ onSectionChange }: { onSectionChange?: (section: A
           </AnimatePresence>
         </div>
       )}
+      
+      <RFQFormModal
+        open={isModalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          // Refresh list on close just in case a new one was submitted
+          setLoading(true);
+          customerQuotationApi.listRFQs().then(setRFQs).catch(() => setRFQs([])).finally(() => setLoading(false));
+        }}
+      />
     </motion.div>
   );
 }

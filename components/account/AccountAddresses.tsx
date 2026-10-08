@@ -22,12 +22,26 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Badge } from '@/components/ui/Badge';
 import { toast } from '@/components/ui/Toast';
+import { api } from '@/lib/api';
 import type { AddressType } from '@/types';
-import {
-  getStoredAddresses,
-  saveAddresses,
-  type MockAddress,
-} from './mockAddresses';
+
+// ── API Address shape (matches backend AddressSerializer) ──────────────────
+interface MockAddress {
+  id:        string | number;
+  type:      AddressType;
+  label?:    string;
+  firstName: string;
+  lastName:  string;
+  phone:     string;
+  line1:     string;
+  line2?:    string;
+  city:      string;
+  state:     string;
+  pincode:   string;
+  country:   string;
+  isDefault: boolean;
+  userId?:   string;
+}
 
 interface AddressForm {
   type:      AddressType;
@@ -59,27 +73,51 @@ const INDIAN_STATES = [
   'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Puducherry',
 ];
 
-function generateId() {
-  return `addr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+// Map Django snake_case → camelCase used by the UI
+function mapApiAddress(a: Record<string, unknown>): MockAddress {
+  return {
+    id:        a.id as string,
+    type:      (a.type as AddressType) ?? 'home',
+    label:     a.label as string,
+    firstName: a.first_name as string,
+    lastName:  a.last_name as string ?? '',
+    phone:     a.phone as string,
+    line1:     a.line1 as string,
+    line2:     a.line2 as string ?? '',
+    city:      a.city as string,
+    state:     a.state as string,
+    pincode:   a.pincode as string,
+    country:   (a.country as string) ?? 'India',
+    isDefault: !!(a.is_default),
+  };
+}
+
+function token() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('electrohub_access_token') ?? '';
 }
 
 export function AccountAddresses() {
   const { user } = useAuth();
   const [addresses, setAddresses] = React.useState<MockAddress[]>([]);
+  const [isLoading,   setIsLoading]   = React.useState(false);
   const [modalOpen,   setModalOpen]   = React.useState(false);
   const [editAddress, setEditAddress] = React.useState<MockAddress | null>(null);
   const [deleteId,    setDeleteId]    = React.useState<string | null>(null);
   const [isSaving,    setIsSaving]    = React.useState(false);
 
-  // Load addresses
+  // Load addresses from API
   React.useEffect(() => {
-    if (user?.id) setAddresses(getStoredAddresses(user.id));
+    if (!user?.id) return;
+    setIsLoading(true);
+    api.get<MockAddress[] | { results?: MockAddress[] }>('/addresses/', { token: token() })
+      .then((res) => {
+        const records = Array.isArray(res) ? res : (res.results ?? []);
+        setAddresses(records.map((a) => mapApiAddress(a as unknown as Record<string, unknown>)));
+      })
+      .catch(() => { /* silently fall back to empty */ })
+      .finally(() => setIsLoading(false));
   }, [user?.id]);
-
-  const persist = (updated: MockAddress[]) => {
-    setAddresses(updated);
-    if (user?.id) saveAddresses(user.id, updated);
-  };
 
   const {
     register,
@@ -117,45 +155,56 @@ export function AccountAddresses() {
 
   const onSubmit = async (data: AddressForm) => {
     setIsSaving(true);
-    await new Promise((res) => setTimeout(res, 600));
-
-    if (editAddress) {
-      const updated = addresses.map((a) =>
-        a.id === editAddress.id ? { ...a, ...data } : a,
-      );
-      persist(updated);
-      toast.success('Address updated!');
-    } else {
-      const newAddr: MockAddress = {
-        id:        generateId(),
-        userId:    user?.id ?? '',
-        isDefault: addresses.length === 0,
-        ...data,
-      };
-      persist([...addresses, newAddr]);
-      toast.success('Address added!');
+    const payload = {
+      type:       data.type,
+      label:      data.label,
+      first_name: data.firstName,
+      last_name:  data.lastName,
+      phone:      data.phone,
+      line1:      data.line1,
+      line2:      data.line2,
+      city:       data.city,
+      state:      data.state,
+      pincode:    data.pincode,
+      country:    data.country,
+    };
+    try {
+      if (editAddress) {
+        const res = await api.patch<Record<string, unknown>>(`/addresses/${editAddress.id}/`, payload, { token: token() });
+        setAddresses((prev) => prev.map((a) => String(a.id) === String(editAddress.id) ? mapApiAddress(res) : a));
+        toast.success('Address updated!');
+      } else {
+        const res = await api.post<Record<string, unknown>>('/addresses/', payload, { token: token() });
+        setAddresses((prev) => [...prev, mapApiAddress(res)]);
+        toast.success('Address added!');
+      }
+    } catch {
+      toast.error('Failed to save address. Please try again.');
+    } finally {
+      setIsSaving(false);
+      setModalOpen(false);
     }
-
-    setIsSaving(false);
-    setModalOpen(false);
   };
 
-  const handleDelete = (id: string) => {
-    const updated = addresses.filter((a) => a.id !== id);
-    // If deleted was default, make first remaining one default
-    if (updated.length > 0) {
-      const wasDefault = addresses.find((a) => a.id === id)?.isDefault;
-      if (wasDefault) updated[0] = { ...updated[0], isDefault: true };
+  const handleDelete = async (id: string) => {
+    try {
+      await api.delete(`/addresses/${id}/`, { token: token() });
+      setAddresses((prev) => prev.filter((a) => String(a.id) !== String(id)));
+      setDeleteId(null);
+      toast.success('Address removed');
+    } catch {
+      toast.error('Failed to delete address.');
     }
-    persist(updated);
-    setDeleteId(null);
-    toast.success('Address removed');
   };
 
-  const handleSetDefault = (id: string) => {
-    const updated = addresses.map((a) => ({ ...a, isDefault: a.id === id }));
-    persist(updated);
-    toast.success('Default address updated');
+  const handleSetDefault = async (id: string) => {
+    try {
+      await api.patch<Record<string, unknown>>(`/addresses/${id}/set-default/`, {}, { token: token() });
+      setAddresses((prev) => prev.map((a) => ({ ...a, isDefault: String(a.id) === String(id) })));
+      toast.success('Default address updated');
+    } catch {
+      toast.error('Failed to update default address.');
+    }
   };
 
   return (
@@ -253,7 +302,7 @@ export function AccountAddresses() {
                         variant="outline"
                         size="xs"
                         leftIcon={<Check size={12} />}
-                        onClick={() => handleSetDefault(addr.id)}
+                        onClick={() => handleSetDefault(String(addr.id))}
                         id={`addr-set-default-${addr.id}`}
                       >
                         Set Default
@@ -272,9 +321,9 @@ export function AccountAddresses() {
                       variant="ghost"
                       size="xs"
                       leftIcon={<Trash2 size={12} />}
-                      onClick={() => setDeleteId(addr.id)}
-                      className="text-[var(--danger)] hover:bg-[var(--danger-bg)]"
+                      onClick={() => setDeleteId(String(addr.id))}
                       id={`addr-delete-${addr.id}`}
+                      className="text-[var(--danger)] hover:bg-[var(--danger)]/10"
                     >
                       Delete
                     </Button>

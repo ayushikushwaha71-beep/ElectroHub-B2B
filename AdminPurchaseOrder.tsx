@@ -47,9 +47,8 @@ import { Button } from '@/components/ui/Button';
 import { Input }  from '@/components/ui/Input';
 import { Modal }  from '@/components/ui/Modal';
 import { toast }  from '@/components/ui/Toast';
-import type { ApprovableQuotation } from './AdminApprovals';
-
-// ─── PO Status ────────────────────────────────────────────────────────────────
+import { adminQuotationApi } from '@/lib/quotation-api';
+import type { ApprovableQuotation, ApproverRole, ApprovalStatus } from './AdminApprovals';
 
 export type POStatus = 'pending' | 'issued' | 'acknowledged';
 
@@ -189,9 +188,9 @@ function PODocument({ quotation, poNumber }: { quotation: ApprovableQuotation; p
       </div>
 
       {/* Line items table */}
-      <div className="rounded-xl overflow-hidden border border-[var(--border)]">
-        <table className="min-w-full text-sm">
-          <thead>
+      <div className="rounded-xl overflow-hidden border border-[var(--border)] print:overflow-visible print:border-none">
+        <table className="min-w-full text-sm print:break-inside-auto">
+          <thead className="print:table-header-group">
             <tr className="bg-[var(--background-alt)] border-b border-[var(--border)]">
               <th className="px-4 py-2.5 text-left font-semibold text-[var(--text-muted)] text-xs">#</th>
               <th className="px-4 py-2.5 text-left font-semibold text-[var(--text-muted)] text-xs">Description</th>
@@ -201,8 +200,8 @@ function PODocument({ quotation, poNumber }: { quotation: ApprovableQuotation; p
               <th className="px-4 py-2.5 text-right font-semibold text-[var(--text-muted)] text-xs">Amount</th>
             </tr>
           </thead>
-          <tbody>
-            <tr className="border-b border-[var(--border)]">
+          <tbody className="print:break-inside-auto divide-y divide-[var(--border)]">
+            <tr className="print:break-inside-avoid">
               <td className="px-4 py-3 text-[var(--text-muted)]">1</td>
               <td className="px-4 py-3">
                 <p className="font-medium text-[var(--text)]">{quotation.productName}</p>
@@ -449,7 +448,8 @@ function PODetailPanel({ quotation, record, onBack, onIssue, onNavigateToInvoice
   };
 
   const handleDownload = () => {
-    toast.success('PO document download triggered (PDF generation would happen here)');
+    window.print();
+    toast.info('Print dialog opened for PDF generation');
   };
 
   return (
@@ -596,88 +596,111 @@ function PODetailPanel({ quotation, record, onBack, onIssue, onNavigateToInvoice
 // Main AdminPurchaseOrder Component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PO_READY_SEED: ApprovableQuotation[] = [
-  {
-    id: 'appr-005', quotationNumber: 'QT-2026-000287', rfqNumber: 'RFQ-2026-000287',
-    customerName: 'Meera Nair', customerEmail: 'meera@industrialpulse.co', customerCompany: 'Industrial Pulse Solutions',
-    productName: 'Industrial BLDC Motor Controller (48V / 30A)', productType: 'existing',
-    quantity: 10, unitPrice: 8500, discountPct: 5, taxPct: 18, shippingCharge: 600,
-    grandTotal: 95963, deliveryLocation: 'Delhi NCR 110001',
-    expectedDelivery: new Date(Date.now() + 22 * 86400000).toISOString().split('T')[0],
-    validUntil: new Date(Date.now() + 8 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. Technical datasheet on request.\n2. 30-day warranty on manufacturing defects.',
-    status: 'po_ready', sentAt: new Date(Date.now() - 20 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
-    history: [
-      { id: 'h-004', role: 'HOD',       action: 'approved', remarks: 'Pricing fair.',                             timestamp: new Date(Date.now() - 15 * 86400000).toISOString() },
-      { id: 'h-005', role: 'Director',  action: 'approved', remarks: 'Approved.',                                 timestamp: new Date(Date.now() - 10 * 86400000).toISOString() },
-      { id: 'h-006', role: 'Accountant',action: 'approved', remarks: 'Budget available. PO can be raised.',       timestamp: new Date(Date.now() - 2 * 86400000).toISOString() },
-    ],
-  },
-];
-
 export function AdminPurchaseOrder({
-  externalQuotations,
   onNavigateToInvoice,
 }: {
-  externalQuotations?: ApprovableQuotation[];
   onNavigateToInvoice?: () => void;
 }) {
-  const baseList    = externalQuotations ?? PO_READY_SEED;
-  const quotations  = baseList.filter((q) => q.status === 'po_ready');
-
+  const [quotations, setQuotations] = React.useState<ApprovableQuotation[]>([]);
   const [search, setSearch]         = React.useState('');
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  // PO records keyed by quotationId
-  const [records, setRecords]       = React.useState<Record<string, PORecord>>(() =>
-    Object.fromEntries(quotations.map((q) => [
-      q.id,
-      { quotationId: q.id, poNumber: poNumberFromQuot(q.quotationNumber), status: 'pending', issuedAt: null, log: [] },
-    ])),
-  );
+  const [records, setRecords]       = React.useState<Record<string, PORecord>>({});
+  const [loading, setLoading]       = React.useState(true);
 
-  // Sync new quotations into records when externalQuotations changes
-  React.useEffect(() => {
-    setRecords((prev) => {
-      const next = { ...prev };
-      for (const q of quotations) {
-        if (!next[q.id]) {
-          next[q.id] = { quotationId: q.id, poNumber: poNumberFromQuot(q.quotationNumber), status: 'pending', issuedAt: null, log: [] };
+  const loadData = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      const [quotRes, poRes] = await Promise.all([
+        adminQuotationApi.listQuotations(),
+        adminQuotationApi.listPOs()
+      ]);
+
+      const poReadyQuots = quotRes.data
+        .filter((q) => q.approval?.approval_status === 'po_ready')
+        .map((q) => ({
+          id: q.id.toString(),
+          quotationNumber: q.quotation_number,
+          rfqNumber: q.rfq_number,
+          customerName: q.customer_name,
+          customerEmail: q.customer_email,
+          customerCompany: q.customer_name,
+          productName: q.product_name,
+          productType: q.product_type,
+          quantity: q.quantity,
+          unitPrice: parseFloat(q.unit_price),
+          discountPct: parseFloat(q.discount_pct),
+          taxPct: parseFloat(q.tax_pct),
+          shippingCharge: parseFloat(q.shipping_charge),
+          grandTotal: q.grand_total,
+          deliveryLocation: q.delivery_location,
+          expectedDelivery: q.expected_delivery || '',
+          validUntil: q.valid_until || '',
+          termsNotes: q.terms_notes,
+          status: 'po_ready' as ApprovalStatus,
+          sentAt: q.sent_at || q.created_at,
+          updatedAt: q.approval!.updated_at,
+          history: q.approval!.entries.map((e) => ({
+            id: e.id.toString(),
+            role: e.approver_role as ApproverRole,
+            action: e.action,
+            remarks: e.remarks,
+            timestamp: e.timestamp,
+          })),
+        }));
+
+      setQuotations(poReadyQuots);
+
+      const newRecords: Record<string, PORecord> = {};
+      const posByQuotId = new Map(poRes.data.map(po => [po.quotation.toString(), po]));
+
+      for (const q of poReadyQuots) {
+        const existingPo = posByQuotId.get(q.id);
+        if (existingPo) {
+          newRecords[q.id] = {
+            quotationId: q.id,
+            poNumber: existingPo.po_number,
+            status: existingPo.status,
+            issuedAt: existingPo.issued_at || null,
+            log: existingPo.log.map(l => ({
+              id: l.id.toString(),
+              action: l.action as 'issued' | 'acknowledged',
+              by: l.actor_name,
+              notes: l.notes,
+              timestamp: l.timestamp
+            }))
+          };
+        } else {
+          newRecords[q.id] = {
+            quotationId: q.id,
+            poNumber: poNumberFromQuot(q.quotationNumber),
+            status: 'pending',
+            issuedAt: null,
+            log: []
+          };
         }
       }
-      return next;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseList]);
+      setRecords(newRecords);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load purchase orders');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const filtered = React.useMemo(() => {
-    const s = search.toLowerCase();
-    if (!s) return quotations;
-    return quotations.filter((q) =>
-      q.quotationNumber.toLowerCase().includes(s) ||
-      q.rfqNumber.toLowerCase().includes(s) ||
-      q.customerName.toLowerCase().includes(s) ||
-      q.productName.toLowerCase().includes(s),
-    );
-  }, [quotations, search]);
+  React.useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  const selectedQ  = quotations.find((q) => q.id === selectedId) ?? null;
-  const selectedRec = selectedId ? records[selectedId] : null;
-
-  const handleIssue = (quotId: string, notes: string) => {
-    setRecords((prev) => {
-      const rec = prev[quotId];
-      if (!rec) return prev;
-      const entry: POIssueEntry = {
-        id: `poi-${Date.now()}`, action: 'issued',
-        by: 'Admin', notes, timestamp: new Date().toISOString(),
-      };
-      const updated: PORecord = {
-        ...rec, status: 'issued', issuedAt: new Date().toISOString(), log: [...rec.log, entry],
-      };
-      toast.success(`${rec.poNumber} issued successfully`);
-      return { ...prev, [quotId]: updated };
-    });
+  const handleIssue = async (quotId: string, notes: string) => {
+    try {
+      await adminQuotationApi.issuePO(Number(quotId), notes);
+      toast.success('PO issued successfully');
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to issue PO');
+    }
   };
 
   if (selectedQ && selectedRec) {
@@ -734,17 +757,13 @@ export function AdminPurchaseOrder({
       </div>
 
       {/* Table */}
-      {filtered.length === 0 ? (
+      {loading ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
-          <ClipboardList size={32} className="mx-auto text-[var(--text-subtle)] mb-3" />
-          <p className="font-semibold text-[var(--text)]">
-            {search ? 'No matching purchase orders' : 'No PO-ready quotations'}
-          </p>
-          <p className="text-sm text-[var(--text-muted)] mt-1">
-            {search
-              ? 'Try adjusting your search.'
-              : 'Quotations that complete the full approval chain will appear here.'}
-          </p>
+          <p className="font-semibold text-[var(--text)]">Loading...</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
+          <p className="font-semibold text-[var(--text)]">No purchase orders found</p>
         </div>
       ) : (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] shadow-[var(--shadow-card)] overflow-hidden">

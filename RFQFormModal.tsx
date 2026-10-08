@@ -34,9 +34,9 @@ import { Modal }    from '@/components/ui/Modal';
 import { Button }   from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Badge }    from '@/components/ui/Badge';
-import { RFQ_PRODUCT_OPTIONS, mockSubmitRFQ, EMPTY_RFQ_FORM } from '@/lib/data/rfq';
+import { EMPTY_RFQ_FORM } from '@/rfq';
+import { searchProductsForRFQ, submitRFQToAPI } from '@/lib/rfq-api';
 import { useAuth } from '@/lib/providers/AuthProvider';
-import { addRFQ, formDataToMockRFQ } from '@/components/account/mockRFQs';
 import type { RFQFormData, RFQSubmission, RFQProductOption } from '@/types';
 
 // ─── Step constants ────────────────────────────────────────────────────────────
@@ -145,18 +145,34 @@ function ProductSearchDropdown({
   onSelect: (p: RFQProductOption) => void;
   error?: string;
 }) {
-  const [query,  setQuery]  = React.useState('');
-  const [open,   setOpen]   = React.useState(false);
+  const [query,    setQuery]    = React.useState('');
+  const [open,     setOpen]     = React.useState(false);
+  const [products, setProducts] = React.useState<RFQProductOption[]>([]);
+  const [loading,  setLoading]  = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const filtered = React.useMemo(() =>
-    RFQ_PRODUCT_OPTIONS.filter((p) =>
-      p.name.toLowerCase().includes(query.toLowerCase()) ||
-      p.sku.toLowerCase().includes(query.toLowerCase()) ||
-      p.brand.toLowerCase().includes(query.toLowerCase())
-    ).slice(0, 8),
-    [query]
-  );
+  // Load initial products on mount
+  React.useEffect(() => {
+    searchProductsForRFQ('').then(setProducts).catch(() => setProducts([]));
+  }, []);
+
+  // Debounced search as user types
+  const handleQueryChange = (q: string) => {
+    setQuery(q);
+    clearTimeout(debounceRef.current);
+    setLoading(true);
+    debounceRef.current = setTimeout(() => {
+      searchProductsForRFQ(q).then((res) => {
+        setProducts(res);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    }, 350);
+  };
+
+  const filtered = query.trim()
+    ? products
+    : products.slice(0, 8);
 
   // Close on outside click
   React.useEffect(() => {
@@ -221,7 +237,7 @@ function ProductSearchDropdown({
                   <input
                     autoFocus
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
+                    onChange={(e) => handleQueryChange(e.target.value)}
                     placeholder="Type to filter…"
                     className={cn(
                       'w-full pl-8 pr-3 h-8 text-sm rounded-lg outline-none',
@@ -233,7 +249,9 @@ function ProductSearchDropdown({
               </div>
 
               <div className="max-h-52 overflow-y-auto">
-                {filtered.length === 0 ? (
+                {loading ? (
+                  <p className="py-6 text-center text-sm text-[var(--text-muted)]">Searching…</p>
+                ) : filtered.length === 0 ? (
                   <p className="py-6 text-center text-sm text-[var(--text-muted)]">No products found</p>
                 ) : (
                   filtered.map((p) => (
@@ -251,9 +269,11 @@ function ProductSearchDropdown({
                         <p className="text-sm font-medium text-[var(--text)] truncate">{p.name}</p>
                         <p className="text-xs text-[var(--text-muted)]">{p.brand} · {p.sku}</p>
                       </div>
-                      <span className="text-xs font-semibold text-[var(--primary)] shrink-0">
-                        ₹{p.sellingPrice.toLocaleString('en-IN')}
-                      </span>
+                      {p.sellingPrice > 0 && (
+                        <span className="text-xs font-semibold text-[var(--primary)] shrink-0">
+                          ₹{p.sellingPrice.toLocaleString('en-IN')}
+                        </span>
+                      )}
                     </button>
                   ))
                 )}
@@ -526,7 +546,7 @@ function Step3Review({
           ) : (
             <>
               <ReviewRow label="Requirement" value={data.customProductName} />
-              <ReviewRow label="Reference URL" value={data.referenceUrl} optional />
+              <ReviewRow label="Reference URL" value={data.referenceUrl ?? ''} optional />
             </>
           )}
         </div>
@@ -572,9 +592,11 @@ function Step4Success({
   submission: RFQSubmission;
   onClose: () => void;
 }) {
-  const submittedDate = new Date(submission.submittedAt).toLocaleDateString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-  });
+  const submittedDate = submission.submittedAt
+    ? new Date(submission.submittedAt).toLocaleDateString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric',
+      })
+    : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
   return (
     <motion.div
@@ -691,7 +713,10 @@ export function RFQFormModal({
   const [errors,          setErrors]          = React.useState<Partial<Record<keyof RFQFormData, string>>>({});
   const [selectedProduct, setSelectedProduct] = React.useState<RFQProductOption | null>(() => {
     if (!prefillProductId) return null;
-    return RFQ_PRODUCT_OPTIONS.find((p) => p.id === prefillProductId) ?? null;
+    // Will be populated when products load from backend
+    return prefillProductName
+      ? { id: prefillProductId, name: prefillProductName, sku: '', brand: '', sellingPrice: 0 }
+      : null;
   });
   const [submitting,      setSubmitting]      = React.useState(false);
   const [submission,      setSubmission]      = React.useState<RFQSubmission | null>(null);
@@ -712,12 +737,42 @@ export function RFQFormModal({
         quantity:            prefillQuantity    ?? 1,
       });
       setSelectedProduct(
-        prefillProductId
-          ? (RFQ_PRODUCT_OPTIONS.find((p) => p.id === prefillProductId) ?? null)
+        prefillProductId && prefillProductName
+          ? { id: prefillProductId, name: prefillProductName, sku: '', brand: '', sellingPrice: 0 }
           : null
       );
     }
   }, [open, prefillProductId, prefillProductName, prefillQuantity]);
+
+  // ── Auto-fill delivery location from stored user address ───────────────────
+  React.useEffect(() => {
+    if (!open) return;
+    try {
+      // Try to read the default address from localStorage (set by AccountAddresses)
+      const stored = localStorage.getItem('electrohub_addresses');
+      if (stored) {
+        const addresses = JSON.parse(stored) as Array<{
+          isDefault?: boolean;
+          city?: string;
+          state?: string;
+          pincode?: string;
+        }>;
+        const defaultAddr = addresses.find((a) => a.isDefault) ?? addresses[0];
+        if (defaultAddr && !form.deliveryLocation) {
+          const parts = [defaultAddr.city, defaultAddr.state, defaultAddr.pincode].filter(Boolean);
+          if (parts.length > 0) {
+            setForm((prev) => ({
+              ...prev,
+              deliveryLocation: prev.deliveryLocation || parts.join(', '),
+            }));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const updateField = (field: keyof RFQFormData, value: string | number | boolean) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -728,8 +783,9 @@ export function RFQFormModal({
     setSelectedProduct(p);
     setForm((prev) => ({
       ...prev,
-      existingProductId:   p.id,
-      existingProductName: p.name,
+      existingProductId:        p.id,
+      existingProductNumericId: p.numericId,
+      existingProductName:      p.name,
     }));
     setErrors((prev) => ({ ...prev, existingProductId: undefined }));
   };
@@ -776,24 +832,20 @@ export function RFQFormModal({
     setStep((s) => s - 1);
   };
 
-  // ── Submit ───────────────────────────────────────────────────────────────────
+  // ── Submit — calls real Django API ──────────────────────────────────────────
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+
   const handleSubmit = async () => {
     setSubmitting(true);
+    setSubmitError(null);
     try {
-      const result = await mockSubmitRFQ(form);
-      // Persist to local store so it appears in My RFQs immediately
-      if (user?.id) {
-        const mockRFQ = formDataToMockRFQ(
-          user.id,
-          result.rfqNumber,
-          result.submittedAt,
-          form,
-        );
-        addRFQ(user.id, mockRFQ);
-      }
+      const result = await submitRFQToAPI(form);
       setSubmission(result);
       setSlideDir(1);
       setStep(4);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to submit RFQ. Please try again.';
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -883,16 +935,24 @@ export function RFQFormModal({
               Next
             </Button>
           ) : (
-            <Button
-              variant="gradient"
-              size="md"
-              onClick={handleSubmit}
-              isLoading={submitting}
-              loadingText="Submitting…"
-              rightIcon={!submitting ? <CheckCircle2 size={15} /> : undefined}
-            >
-              Submit RFQ
-            </Button>
+            <div className="flex flex-col items-end gap-2">
+              {submitError && (
+                <p role="alert" className="text-xs text-[var(--danger)] flex items-center gap-1">
+                  <AlertCircle size={12} />
+                  {submitError}
+                </p>
+              )}
+              <Button
+                variant="gradient"
+                size="md"
+                onClick={handleSubmit}
+                isLoading={submitting}
+                loadingText="Submitting…"
+                rightIcon={!submitting ? <CheckCircle2 size={15} /> : undefined}
+              >
+                Submit RFQ
+              </Button>
+            </div>
           )}
         </div>
       )}

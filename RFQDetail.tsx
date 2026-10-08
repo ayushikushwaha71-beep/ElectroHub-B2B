@@ -39,12 +39,12 @@ import {
 import { cn } from '@/utils/cn';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import type { MockRFQ, MockRFQStatus } from './mockRFQs';
+import type { RFQ, RFQStatus } from '@/lib/quotation-api';
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
 export const RFQ_STATUS_CONFIG: Record<
-  MockRFQStatus,
+  RFQStatus,
   {
     label:   string;
     variant: 'default' | 'warning' | 'info' | 'success' | 'danger';
@@ -63,7 +63,7 @@ export const RFQ_STATUS_CONFIG: Record<
 // ─── Timeline definition ──────────────────────────────────────────────────────
 
 interface TimelineStep {
-  status:      MockRFQStatus;
+  status:      RFQStatus;
   label:       string;
   description: string;
   icon:        React.ElementType;
@@ -112,7 +112,7 @@ const TIMELINE_STEPS: TimelineStep[] = [
  * Returns the zero-based index of the current status in the timeline.
  * Returns -1 for 'rejected' (end-state, not on the positive path).
  */
-function getTimelineProgress(status: MockRFQStatus): number {
+function getTimelineProgress(status: RFQStatus): number {
   if (status === 'rejected') return -1;
   const idx = TIMELINE_STEPS.findIndex((s) => s.status === status);
   return idx;
@@ -166,7 +166,7 @@ function SectionCard({
 
 // ─── Status Timeline ──────────────────────────────────────────────────────────
 
-function StatusTimeline({ status }: { status: MockRFQStatus }) {
+function StatusTimeline({ status }: { status: RFQStatus }) {
   const progress    = getTimelineProgress(status);
   const isRejected  = status === 'rejected';
 
@@ -267,24 +267,24 @@ function StatusTimeline({ status }: { status: MockRFQStatus }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface RFQDetailProps {
-  rfq:                 MockRFQ;
+  rfq:                 RFQ;
   onBack:              () => void;
   /** Navigate the account dashboard to My Quotations section */
   onGoToQuotations?:  () => void;
 }
 
 export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
-  const statusCfg  = RFQ_STATUS_CONFIG[rfq.status];
+  const statusCfg  = RFQ_STATUS_CONFIG[rfq.status] || RFQ_STATUS_CONFIG.submitted;
   const StatusIcon = statusCfg.icon;
 
-  const submittedDate = new Date(rfq.submittedAt).toLocaleDateString('en-IN', {
+  const submittedDate = rfq.submitted_at ? new Date(rfq.submitted_at).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
-  });
-  const updatedDate = new Date(rfq.updatedAt).toLocaleDateString('en-IN', {
+  }) : '—';
+  const updatedDate = rfq.updated_at ? new Date(rfq.updated_at).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
-  });
-  const requiredDate = rfq.requiredByDate
-    ? new Date(rfq.requiredByDate).toLocaleDateString('en-IN', {
+  }) : '—';
+  const requiredDate = rfq.required_by_date
+    ? new Date(rfq.required_by_date).toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric',
       })
     : '—';
@@ -311,7 +311,7 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="font-bold font-display text-[var(--text)] text-lg leading-none font-mono">
-              {rfq.rfqNumber}
+              {rfq.rfq_number}
             </h2>
             <Badge
               variant={statusCfg.variant}
@@ -323,7 +323,7 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
           </div>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             Submitted {submittedDate}
-            {rfq.updatedAt !== rfq.submittedAt && ` · Updated ${updatedDate}`}
+            {rfq.updated_at !== rfq.submitted_at && ` · Updated ${updatedDate}`}
           </p>
         </div>
       </div>
@@ -373,26 +373,26 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
 
       {/* ── Product / requirement ─────────────────────────────────────────── */}
       <SectionCard
-        icon={rfq.productType === 'existing' ? Package : Sparkles}
-        title={rfq.productType === 'existing' ? 'Product' : 'Custom Requirement'}
+        icon={rfq.product_type === 'existing' ? Package : Sparkles}
+        title={rfq.product_type === 'existing' ? 'Product' : 'Custom Requirement'}
       >
-        <DetailRow icon={rfq.productType === 'existing' ? Package : FileText} label="Product / Requirement">
-          <span className="leading-snug">{rfq.productName}</span>
+        <DetailRow icon={rfq.product_type === 'existing' ? Package : FileText} label="Product / Requirement">
+          <span className="leading-snug">{rfq.product_name || rfq.custom_product_name || 'Unknown Product'}</span>
         </DetailRow>
         <DetailRow icon={NotebookText} label="Product Type">
-          <Badge variant={rfq.productType === 'existing' ? 'primary' : 'info'} size="xs">
-            {rfq.productType === 'existing' ? 'ElectroHub Catalogue' : 'Custom / External'}
+          <Badge variant={rfq.product_type === 'existing' ? 'primary' : 'info'} size="xs">
+            {rfq.product_type === 'existing' ? 'ElectroHub Catalogue' : 'Custom / External'}
           </Badge>
         </DetailRow>
-        {rfq.referenceUrl && (
+        {rfq.reference_url && (
           <DetailRow icon={Link2} label="Reference URL">
             <a
-              href={rfq.referenceUrl}
+              href={rfq.reference_url}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--primary)] hover:underline inline-flex items-center gap-1 break-all"
             >
-              <span className="truncate max-w-xs">{rfq.referenceUrl}</span>
+              <span className="truncate max-w-xs">{rfq.reference_url}</span>
               <ExternalLink size={12} className="shrink-0" />
             </a>
           </DetailRow>
@@ -403,7 +403,7 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
       <SectionCard icon={Wrench} title="Technical Specifications">
         <div className="py-3">
           <p className="text-sm text-[var(--text)] leading-relaxed whitespace-pre-wrap">
-            {rfq.technicalSpecs || (
+            {rfq.technical_specs || (
               <span className="text-[var(--text-subtle)] italic">None provided</span>
             )}
           </p>
@@ -422,7 +422,7 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
           }
         </DetailRow>
         <DetailRow icon={MapPin} label="Delivery Location">
-          <span>{rfq.deliveryLocation}</span>
+          <span>{rfq.delivery_location}</span>
         </DetailRow>
         <DetailRow icon={Calendar} label="Required By">
           <span>{requiredDate}</span>
@@ -430,11 +430,11 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
       </SectionCard>
 
       {/* ── Additional requirements ────────────────────────────────────────── */}
-      {rfq.additionalNotes && (
+      {rfq.additional_notes && (
         <SectionCard icon={NotebookText} title="Additional Requirements / Notes">
           <div className="py-3">
             <p className="text-sm text-[var(--text)] leading-relaxed whitespace-pre-wrap">
-              {rfq.additionalNotes}
+              {rfq.additional_notes}
             </p>
           </div>
         </SectionCard>
@@ -443,22 +443,22 @@ export function RFQDetail({ rfq, onBack, onGoToQuotations }: RFQDetailProps) {
       {/* ── Submission info ────────────────────────────────────────────────── */}
       <SectionCard icon={FileText} title="Submission Information">
         <DetailRow icon={FileText} label="RFQ Number">
-          <span className="font-mono">{rfq.rfqNumber}</span>
+          <span className="font-mono">{rfq.rfq_number}</span>
         </DetailRow>
         <DetailRow icon={Clock} label="Submitted At">
           <span>
-            {new Date(rfq.submittedAt).toLocaleString('en-IN', {
+            {rfq.submitted_at ? new Date(rfq.submitted_at).toLocaleString('en-IN', {
               day: '2-digit', month: 'short', year: 'numeric',
               hour: '2-digit', minute: '2-digit',
-            })}
+            }) : '—'}
           </span>
         </DetailRow>
         <DetailRow icon={Clock} label="Last Updated">
           <span>
-            {new Date(rfq.updatedAt).toLocaleString('en-IN', {
+            {rfq.updated_at ? new Date(rfq.updated_at).toLocaleString('en-IN', {
               day: '2-digit', month: 'short', year: 'numeric',
               hour: '2-digit', minute: '2-digit',
-            })}
+            }) : '—'}
           </span>
         </DetailRow>
         <DetailRow icon={statusCfg.icon} label="Current Status">

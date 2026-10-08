@@ -24,7 +24,6 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { formatINR, formatDate } from '@/utils/format';
-import { getStoredOrders } from './mockOrders';
 // Local type that matches the Django OrderSerializer → mapped to this shape
 interface RealOrder {
   id:             string;
@@ -110,11 +109,8 @@ export function AccountOrders() {
   const [selectedOrder, setSelected] = React.useState<RealOrder | null>(null);
   const [search, setSearch]          = React.useState('');
 
-  React.useEffect(() => {
+  const fetchOrders = () => {
     if (!user?.id) return;
-
-    // ── Load B2B mock orders from localStorage (quotation-linked) ──────────
-    const mockB2BOrders = getStoredOrders(user.id);
 
     // ── Load real orders from Django backend ───────────────────────────────
     const accessToken = localStorage.getItem('electrohub_access_token') ?? '';
@@ -165,25 +161,15 @@ export function AccountOrders() {
             country:   'India',
           },
         }));
-        // Merge: B2B mock orders first (most recent), then API orders
-        // Deduplicate by order number in case backend returns some B2B orders too
-        const apiOrderNumbers = new Set(apiOrders.map((o) => o.orderNumber));
-        const b2bAsReal: RealOrder[] = mockB2BOrders.map((mo) => ({
-          ...mo,
-          quotationRef:    mo.quotationRef,
-          quotationNumber: mo.quotationNumber,
-        })).filter((mo) => !apiOrderNumbers.has(mo.orderNumber));
-        setOrders([...b2bAsReal, ...apiOrders]);
+        setOrders(apiOrders);
       })
       .catch(() => {
-        // Backend unreachable — still show mock B2B orders
-        const b2bAsReal: RealOrder[] = mockB2BOrders.map((mo) => ({
-          ...mo,
-          quotationRef:    mo.quotationRef,
-          quotationNumber: mo.quotationNumber,
-        }));
-        setOrders(b2bAsReal);
+        setOrders([]);
       });
+  };
+
+  React.useEffect(() => {
+    fetchOrders();
   }, [user?.id]);
 
   const filtered = orders.filter((o) =>
@@ -193,7 +179,7 @@ export function AccountOrders() {
 
   // ── Order Detail View ──────────────────────────────────────────────────────────
   if (selectedOrder) {
-    return <OrderDetail order={selectedOrder} onBack={() => setSelected(null)} />;
+    return <OrderDetail order={selectedOrder} onBack={() => setSelected(null)} refreshOrders={fetchOrders} />;
   }
 
   return (
@@ -332,11 +318,26 @@ export function AccountOrders() {
 
 // ── Order Detail ───────────────────────────────────────────────────────────────
 
-function OrderDetail({ order, onBack }: { order: RealOrder; onBack: () => void }) {
+function OrderDetail({ order, onBack, refreshOrders }: { order: RealOrder; onBack: () => void; refreshOrders: () => void; }) {
   const statusCfg = STATUS_CONFIG[order.status];
   const StatusIcon = statusCfg.icon;
   const progress = getTrackingProgress(order.status);
   const isCancelled = order.status === 'cancelled' || order.status === 'returned' || order.status === 'refunded';
+  const [completing, setCompleting] = React.useState(false);
+
+  const handleComplete = async () => {
+    try {
+      setCompleting(true);
+      const accessToken = localStorage.getItem('electrohub_access_token');
+      await api.post(`/orders/${order.id}/complete/`, {}, { token: accessToken || '' });
+      refreshOrders();
+      onBack();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCompleting(false);
+    }
+  };
 
   return (
     <motion.div
@@ -361,9 +362,16 @@ function OrderDetail({ order, onBack }: { order: RealOrder; onBack: () => void }
             </p>
           )}
         </div>
-        <Badge variant={statusCfg.variant} size="sm" icon={<StatusIcon size={11} />} className="ml-auto">
-          {statusCfg.label}
-        </Badge>
+        <div className="ml-auto flex items-center gap-2">
+          <Badge variant={statusCfg.variant} size="sm" icon={<StatusIcon size={11} />}>
+            {statusCfg.label}
+          </Badge>
+          {order.status === 'delivered' && (
+            <Button size="sm" variant="primary" onClick={handleComplete} isLoading={completing} id="mark-completed">
+              Mark as Completed
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Tracking timeline */}

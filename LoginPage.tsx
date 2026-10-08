@@ -36,12 +36,24 @@ export function LoginPage() {
 
   const onSubmit = async (data: LoginForm) => {
     setApiError('');
-    const err = await login(data.email, data.password);
+    const result = await login(data.email, data.password);
+    // login() returns LoginResult = { error, user } — check the error field
+    const err = result && typeof result === 'object' && 'error' in result
+      ? (result as { error: { message: string } | null }).error
+      : (result as unknown as { message: string } | null);
     if (err) {
       setApiError(err.message);
     } else {
       toast.success('Welcome back!');
-      router.push('/');
+      // Redirect admin users to /admin, customers to account
+      const user = result && typeof result === 'object' && 'user' in result
+        ? (result as { user: { role?: string } | null }).user
+        : null;
+      if (user?.role && ['admin', 'staff'].includes((user.role as string).toLowerCase())) {
+        router.push('/admin/vendors');
+      } else {
+        router.push('/');
+      }
     }
   };
 

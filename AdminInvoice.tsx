@@ -53,7 +53,8 @@ import { Button } from '@/components/ui/Button';
 import { Input }  from '@/components/ui/Input';
 import { Modal }  from '@/components/ui/Modal';
 import { toast }  from '@/components/ui/Toast';
-import type { ApprovableQuotation } from './AdminApprovals';
+import { adminQuotationApi } from '@/lib/quotation-api';
+import type { ApprovableQuotation, ApproverRole, ApprovalStatus } from './AdminApprovals';
 
 // ─── Invoice status ───────────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ export interface InvoiceRecord {
 
 // ─── GST Helpers ──────────────────────────────────────────────────────────────
 
-function computeGst(taxable: number, taxPct: number, isIntraState: boolean) {
+export function computeGst(taxable: number, taxPct: number, isIntraState: boolean) {
   const total = taxable * (taxPct / 100);
   if (isIntraState) {
     const half = total / 2;
@@ -164,7 +165,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 
 // ─── GST Invoice Document ─────────────────────────────────────────────────────
 
-function InvoiceDocument({
+export function InvoiceDocument({
   quotation,
   record,
 }: {
@@ -239,7 +240,7 @@ function InvoiceDocument({
       </div>
 
       {/* Line items table with HSN */}
-      <div className="rounded-xl overflow-hidden border border-[var(--border)]">
+      <div className="rounded-xl border border-[var(--border)] overflow-hidden">
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-[var(--background-alt)] border-b border-[var(--border)]">
@@ -261,30 +262,62 @@ function InvoiceDocument({
               <th className="px-3 py-2.5 text-right font-semibold text-[var(--text-muted)] text-xs">Amount</th>
             </tr>
           </thead>
-          <tbody>
-            <tr className="border-b border-[var(--border)]">
-              <td className="px-3 py-3 text-[var(--text-muted)]">1</td>
-              <td className="px-3 py-3">
-                <p className="font-medium text-[var(--text)]">{quotation.productName}</p>
-                <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                  {quotation.productType === 'custom' ? 'Custom / External' : 'ElectroHub Catalogue Item'}
-                </p>
-              </td>
-              <td className="px-3 py-3 text-right text-[var(--text-muted)] text-xs font-mono">8542</td>
-              <td className="px-3 py-3 text-right text-[var(--text)]">{quotation.quantity.toLocaleString('en-IN')}</td>
-              <td className="px-3 py-3 text-right font-medium text-[var(--text)]">{fmtINR(quotation.unitPrice)}</td>
-              <td className="px-3 py-3 text-right text-[var(--text-muted)]">{fmtINR(disc)}</td>
-              <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(taxable)}</td>
-              {record.isIntraState ? (
-                <>
-                  <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.cgst)}</td>
-                  <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.sgst)}</td>
-                </>
-              ) : (
-                <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.igst)}</td>
-              )}
-              <td className="px-3 py-3 text-right font-semibold text-[var(--text)]">{fmtINR(taxable + gst.total)}</td>
-            </tr>
+          <tbody className="divide-y divide-[var(--border)]">
+            {quotation.items && quotation.items.length > 0 ? (
+              quotation.items.map((item: any, idx: number) => {
+                const itemSub = item.quantity * Number(item.unit_price || 0);
+                const itemDisc = itemSub * (Number(item.discount_pct || 0) / 100);
+                const itemTaxable = itemSub - itemDisc;
+                const itemGst = computeGst(itemTaxable, Number(item.tax_pct || 0), record.isIntraState);
+                return (
+                  <tr key={item.id || idx}>
+                    <td className="px-3 py-3 text-[var(--text-muted)]">{idx + 1}</td>
+                    <td className="px-3 py-3">
+                      <p className="font-medium text-[var(--text)]">{item.product_name || item.product_display?.name}</p>
+                      {item.notes && <p className="text-xs text-[var(--text-muted)] mt-0.5">{item.notes}</p>}
+                    </td>
+                    <td className="px-3 py-3 text-right text-[var(--text-muted)] text-xs font-mono">{item.hsn_code || '8542'}</td>
+                    <td className="px-3 py-3 text-right text-[var(--text)]">{item.quantity.toLocaleString('en-IN')}</td>
+                    <td className="px-3 py-3 text-right font-medium text-[var(--text)]">{fmtINR(Number(item.unit_price || 0))}</td>
+                    <td className="px-3 py-3 text-right text-[var(--text-muted)]">{fmtINR(itemDisc)}</td>
+                    <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(itemTaxable)}</td>
+                    {record.isIntraState ? (
+                      <>
+                        <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(itemGst.cgst)}</td>
+                        <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(itemGst.sgst)}</td>
+                      </>
+                    ) : (
+                      <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(itemGst.igst)}</td>
+                    )}
+                    <td className="px-3 py-3 text-right font-semibold text-[var(--text)]">{fmtINR(itemTaxable + itemGst.total)}</td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td className="px-3 py-3 text-[var(--text-muted)]">1</td>
+                <td className="px-3 py-3">
+                  <p className="font-medium text-[var(--text)]">{quotation.productName}</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                    {quotation.productType === 'custom' ? 'Custom / External' : 'ElectroHub Catalogue Item'}
+                  </p>
+                </td>
+                <td className="px-3 py-3 text-right text-[var(--text-muted)] text-xs font-mono">8542</td>
+                <td className="px-3 py-3 text-right text-[var(--text)]">{quotation.quantity.toLocaleString('en-IN')}</td>
+                <td className="px-3 py-3 text-right font-medium text-[var(--text)]">{fmtINR(quotation.unitPrice)}</td>
+                <td className="px-3 py-3 text-right text-[var(--text-muted)]">{fmtINR(disc)}</td>
+                <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(taxable)}</td>
+                {record.isIntraState ? (
+                  <>
+                    <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.cgst)}</td>
+                    <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.sgst)}</td>
+                  </>
+                ) : (
+                  <td className="px-3 py-3 text-right text-[var(--text)]">{fmtINR(gst.igst)}</td>
+                )}
+                <td className="px-3 py-3 text-right font-semibold text-[var(--text)]">{fmtINR(taxable + gst.total)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -666,6 +699,16 @@ function GSTTypeToggle({
 
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+
+function downloadInvoicePdfAdmin(quotationId: string | number) {
+  const token = typeof window !== 'undefined'
+    ? (localStorage.getItem('electrohub_access_token') || '')
+    : '';
+  const url = `${API_BASE}/quotations/${quotationId}/invoice/pdf/?token=${encodeURIComponent(token)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 interface InvoiceDetailPanelProps {
   quotation: ApprovableQuotation;
   record:    InvoiceRecord;
@@ -701,7 +744,8 @@ function InvoiceDetailPanel({
   };
 
   const handleDownload = () => {
-    toast.success('Invoice download triggered (PDF generation would happen here)');
+    downloadInvoicePdfAdmin(quotation.id);
+    toast.info('Downloading invoice PDF…');
   };
 
   return (
@@ -876,106 +920,109 @@ function InvoiceDetailPanel({
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Seed data — mirrors PO_READY_SEED in AdminPurchaseOrder but for issued POs
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const INV_SEED: ApprovableQuotation[] = [
-  {
-    id: 'inv-seed-001', quotationNumber: 'QT-2026-000287', rfqNumber: 'RFQ-2026-000287',
-    customerName: 'Meera Nair', customerEmail: 'meera@industrialpulse.co', customerCompany: 'Industrial Pulse Solutions',
-    productName: 'Industrial BLDC Motor Controller (48V / 30A)', productType: 'existing',
-    quantity: 10, unitPrice: 8500, discountPct: 5, taxPct: 18, shippingCharge: 600,
-    grandTotal: 95963, deliveryLocation: 'Delhi NCR 110001',
-    expectedDelivery: new Date(Date.now() + 22 * 86400000).toISOString().split('T')[0],
-    validUntil: new Date(Date.now() + 8 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. Technical datasheet on request.\n2. 30-day warranty on manufacturing defects.',
-    status: 'po_ready', sentAt: new Date(Date.now() - 22 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
-    history: [
-      { id: 'h-i01', role: 'HOD',       action: 'approved', remarks: 'Pricing fair.',                       timestamp: new Date(Date.now() - 18 * 86400000).toISOString() },
-      { id: 'h-i02', role: 'Director',  action: 'approved', remarks: 'Approved.',                           timestamp: new Date(Date.now() - 12 * 86400000).toISOString() },
-      { id: 'h-i03', role: 'Accountant',action: 'approved', remarks: 'Budget available. Invoice can go.', timestamp: new Date(Date.now() - 3 * 86400000).toISOString() },
-    ],
-  },
-  {
-    id: 'inv-seed-002', quotationNumber: 'QT-2026-000501', rfqNumber: 'RFQ-2026-000501',
-    customerName: 'Arjun Mehta', customerEmail: 'arjun@techfabindia.com', customerCompany: 'TechFab India Pvt. Ltd.',
-    productName: 'Arduino UNO R4 WiFi (Qty 30)', productType: 'existing',
-    quantity: 30, unitPrice: 2499, discountPct: 5, taxPct: 18, shippingCharge: 0,
-    grandTotal: 71186, deliveryLocation: 'Bengaluru, Karnataka 560034',
-    expectedDelivery: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-    validUntil: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. GST invoice issued post acceptance.\n2. Payment via NEFT/RTGS within 7 days.',
-    status: 'po_ready', sentAt: new Date(Date.now() - 5 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 1 * 86400000).toISOString(),
-    history: [
-      { id: 'h-i04', role: 'HOD',       action: 'approved', remarks: 'OK.',           timestamp: new Date(Date.now() - 4 * 86400000).toISOString() },
-      { id: 'h-i05', role: 'Director',  action: 'approved', remarks: 'Cleared.',      timestamp: new Date(Date.now() - 3 * 86400000).toISOString() },
-      { id: 'h-i06', role: 'Accountant',action: 'approved', remarks: 'Funds ready.', timestamp: new Date(Date.now() - 1 * 86400000).toISOString() },
-    ],
-  },
-];
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Main AdminInvoice Component
-// ═══════════════════════════════════════════════════════════════════════════════
-
 export function AdminInvoice({
-  externalQuotations,
+  onNavigateToInvoice,
 }: {
-  externalQuotations?: ApprovableQuotation[];
+  onNavigateToInvoice?: () => void;
 }) {
-  const baseList   = externalQuotations ?? INV_SEED;
-  // Show all po_ready quotations (they are the ones that can have invoices)
-  const quotations = baseList.filter((q) => q.status === 'po_ready');
-
+  const [quotations, setQuotations] = React.useState<ApprovableQuotation[]>([]);
   const [search, setSearch]         = React.useState('');
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [records, setRecords]       = React.useState<Record<string, InvoiceRecord>>({});
+  const [loading, setLoading]       = React.useState(true);
 
-  // Invoice records keyed by quotationId
-  const [records, setRecords] = React.useState<Record<string, InvoiceRecord>>(() =>
-    Object.fromEntries(quotations.map((q) => [
-      q.id,
-      {
-        quotationId:   q.id,
-        invoiceNumber: invoiceNumberFromQuot(q.quotationNumber),
-        status:        'draft',
-        dueDate:       dueDateFromNow(15),
-        isIntraState:  true,
-        buyerGstin:    '',
-        sentAt:        null,
-        paidAt:        null,
-        utrReference:  '',
-        log:           [],
-      } satisfies InvoiceRecord,
-    ])),
-  );
+  const loadData = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      const [poRes, invRes] = await Promise.all([
+        adminQuotationApi.listPOs(),
+        adminQuotationApi.listInvoices()
+      ]);
 
-  // Sync new quotations into records
-  React.useEffect(() => {
-    setRecords((prev) => {
-      const next = { ...prev };
-      for (const q of quotations) {
-        if (!next[q.id]) {
-          next[q.id] = {
-            quotationId:   q.id,
-            invoiceNumber: invoiceNumberFromQuot(q.quotationNumber),
-            status:        'draft',
-            dueDate:       dueDateFromNow(15),
-            isIntraState:  true,
-            buyerGstin:    '',
-            sentAt:        null,
-            paidAt:        null,
-            utrReference:  '',
-            log:           [],
+      const validPOs = (Array.isArray(poRes) ? poRes : (poRes as any).results ?? []).filter((po: any) => po.status !== 'pending');
+      const quotData = validPOs.map((po: any) => {
+        const q = po.quotation_data;
+        return {
+          id: q.id.toString(),
+          quotationNumber: q.quotation_number,
+          rfqNumber: q.rfq_number,
+          customerName: q.customer_name,
+          customerEmail: q.customer_email,
+          customerCompany: q.customer_name,
+          productName: q.product_name,
+          productType: q.product_type,
+          quantity: q.quantity,
+          unitPrice: parseFloat(q.unit_price),
+          discountPct: parseFloat(q.discount_pct),
+          taxPct: parseFloat(q.tax_pct),
+          shippingCharge: parseFloat(q.shipping_charge),
+          grandTotal: q.grand_total,
+          deliveryLocation: q.delivery_location,
+          expectedDelivery: q.expected_delivery || '',
+          validUntil: q.valid_until || '',
+          termsNotes: q.terms_notes,
+          status: 'po_ready' as ApprovalStatus,
+          sentAt: q.sent_at || q.created_at,
+          updatedAt: q.updated_at,
+          history: [],
+          items: q.items || [],
+        };
+      });
+
+      setQuotations(quotData as any);
+
+      const newRecords: Record<string, InvoiceRecord> = {};
+      const invByQuotId = new Map((Array.isArray(invRes) ? invRes : (invRes as any).results ?? []).map((inv: any) => [inv.quotation.toString(), inv]));
+
+      for (const po of validPOs) {
+        const qId = po.quotation.toString();
+        const existingInv = invByQuotId.get(qId) as any;
+        if (existingInv) {
+          newRecords[qId] = {
+            quotationId: qId,
+            invoiceNumber: existingInv.invoice_number,
+            status: existingInv.status,
+            dueDate: existingInv.due_date || dueDateFromNow(15),
+            isIntraState: true,
+            buyerGstin: existingInv.gstin_buyer || '',
+            sentAt: existingInv.status !== 'draft' ? (existingInv as any).updated_at || existingInv.paid_at : null,
+            paidAt: existingInv.paid_at || null,
+            utrReference: existingInv.utr_number || '',
+            log: existingInv.log ? existingInv.log.map((l: any) => ({
+              id: String(l.id),
+              action: l.action === 'created' ? 'created' : l.action === 'sent' ? 'sent' : 'payment_confirmed',
+              by: l.actor_name || 'System',
+              notes: l.notes || '',
+              timestamp: l.timestamp
+            })) : [],
+          };
+        } else {
+          newRecords[qId] = {
+            quotationId: qId,
+            invoiceNumber: invoiceNumberFromQuot(po.quotation_data.quotation_number),
+            status: 'draft',
+            dueDate: dueDateFromNow(15),
+            isIntraState: true,
+            buyerGstin: '',
+            sentAt: null,
+            paidAt: null,
+            utrReference: '',
+            log: [],
           };
         }
       }
-      return next;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseList]);
+      setRecords(newRecords);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load invoices');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const filtered = React.useMemo(() => {
     const s = search.toLowerCase();
@@ -993,38 +1040,36 @@ export function AdminInvoice({
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const handleSend = (quotId: string, notes: string) => {
-    setRecords((prev) => {
-      const rec = prev[quotId];
-      if (!rec) return prev;
-      const entry: InvoiceLogEntry = {
-        id: `invl-${Date.now()}`, action: 'sent',
-        by: 'Admin', notes, timestamp: new Date().toISOString(),
-      };
-      const updated: InvoiceRecord = {
-        ...rec, status: 'sent', sentAt: new Date().toISOString(), log: [...rec.log, entry],
-      };
-      toast.success(`${rec.invoiceNumber} sent to customer`);
-      return { ...prev, [quotId]: updated };
-    });
+  const handleSend = async (quotId: string, notes: string) => {
+    try {
+      const rec = records[quotId];
+      if (!rec) return;
+
+      if (rec.status === 'draft') {
+        await adminQuotationApi.createInvoice(Number(quotId), {
+          due_date: rec.dueDate,
+          gstin_buyer: rec.buyerGstin,
+        });
+      }
+
+      await adminQuotationApi.sendInvoice(Number(quotId));
+      toast.success('Invoice sent to customer');
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to send invoice');
+    }
   };
 
-  const handleMarkPaid = (quotId: string, utr: string, notes: string) => {
-    setRecords((prev) => {
-      const rec = prev[quotId];
-      if (!rec) return prev;
-      const entry: InvoiceLogEntry = {
-        id: `invl-${Date.now()}`, action: 'payment_confirmed',
-        by: 'Admin', notes: [utr ? `UTR: ${utr}` : '', notes].filter(Boolean).join(' — '),
-        timestamp: new Date().toISOString(),
-      };
-      const updated: InvoiceRecord = {
-        ...rec, status: 'payment_confirmed', paidAt: new Date().toISOString(),
-        utrReference: utr, log: [...rec.log, entry],
-      };
-      toast.success(`Payment confirmed for ${rec.invoiceNumber}`);
-      return { ...prev, [quotId]: updated };
-    });
+  const handleMarkPaid = async (quotId: string, utr: string, notes: string) => {
+    try {
+      await adminQuotationApi.confirmPayment(Number(quotId), utr);
+      toast.success('Payment confirmed');
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to mark payment as confirmed');
+    }
   };
 
   const handleToggleGST = (quotId: string, isIntra: boolean) => {
@@ -1092,7 +1137,11 @@ export function AdminInvoice({
       </div>
 
       {/* Table */}
-      {filtered.length === 0 ? (
+      {loading ? (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
+          <p className="font-semibold text-[var(--text)]">Loading...</p>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
           <Receipt size={32} className="mx-auto text-[var(--text-subtle)] mb-3" />
           <p className="font-semibold text-[var(--text)]">

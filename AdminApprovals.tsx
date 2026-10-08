@@ -52,6 +52,7 @@ import { Button } from '@/components/ui/Button';
 import { Input }  from '@/components/ui/Input';
 import { Modal }  from '@/components/ui/Modal';
 import { toast }  from '@/components/ui/Toast';
+import { adminQuotationApi } from '@/lib/quotation-api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ export interface ApprovableQuotation {
   sentAt:          string;
   updatedAt:       string;
   history:         ApprovalEntry[];
+  items?:          any[];
 }
 
 // ─── Status config ────────────────────────────────────────────────────────────
@@ -159,99 +161,7 @@ function timeAgo(iso: string): string {
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
-const BASE: Omit<ApprovableQuotation, 'grandTotal'>[] = [
-  {
-    id: 'appr-001', quotationNumber: 'QT-2026-000312', rfqNumber: 'RFQ-2026-000312',
-    customerName: 'Aarav Sharma', customerEmail: 'aarav.sharma@nexgentech.in', customerCompany: 'NexGen Technologies Pvt. Ltd.',
-    productName: 'STM32F407VGT6 ARM Cortex-M4 Microcontroller', productType: 'existing',
-    quantity: 50, unitPrice: 1380, discountPct: 5, taxPct: 18, shippingCharge: 850,
-    deliveryLocation: 'Bengaluru, Karnataka 560034', expectedDelivery: '2026-09-15',
-    validUntil: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. 50% advance, balance before dispatch.\n2. Lead time 10\u201312 business days.\n3. Certificate of conformance included.',
-    status: 'hod_review',
-    sentAt: new Date(Date.now() - 2 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 1 * 86400000).toISOString(),
-    history: [],
-  },
-  {
-    id: 'appr-002', quotationNumber: 'QT-2026-000253', rfqNumber: 'RFQ-2026-000253',
-    customerName: 'Rahul Verma', customerEmail: 'rahul.v@circuitcraft.io', customerCompany: 'CircuitCraft Design Studio',
-    productName: 'Custom 2-layer PCB Fabrication (100 \u00d7 80 mm)', productType: 'custom',
-    quantity: 200, unitPrice: 65, discountPct: 10, taxPct: 18, shippingCharge: 500,
-    deliveryLocation: 'Hyderabad, Telangana 500032', expectedDelivery: '2026-08-30',
-    validUntil: new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. Gerber files required before production start.\n2. 100% advance for custom fabrication.',
-    status: 'director_review',
-    sentAt: new Date(Date.now() - 8 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
-    history: [
-      { id: 'h-001', role: 'HOD', action: 'approved', remarks: 'Pricing within budget. Technical specs verified. Forwarding to Director.', timestamp: new Date(Date.now() - 3 * 86400000).toISOString() },
-    ],
-  },
-  {
-    id: 'appr-003', quotationNumber: 'QT-2026-000421', rfqNumber: 'RFQ-2026-000421',
-    customerName: 'Priya Menon', customerEmail: 'priya@iotedge.co.in', customerCompany: 'IoT Edge Solutions',
-    productName: 'ESP32-WROOM-32E Wi-Fi + BT Module (Qty 500)', productType: 'existing',
-    quantity: 500, unitPrice: 185, discountPct: 12, taxPct: 18, shippingCharge: 0,
-    deliveryLocation: 'Kochi, Kerala 682001', expectedDelivery: new Date(Date.now() + 18 * 86400000).toISOString().split('T')[0],
-    validUntil: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. Bulk pricing for 500+ units.\n2. Free shipping on orders above \u20B950,000.\n3. 50% advance; balance before dispatch.',
-    status: 'accountant_review',
-    sentAt: new Date(Date.now() - 14 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 1 * 86400000).toISOString(),
-    history: [
-      { id: 'h-002', role: 'HOD', action: 'approved', remarks: 'Volume discount appropriate. Approved.', timestamp: new Date(Date.now() - 10 * 86400000).toISOString() },
-      { id: 'h-003', role: 'Director', action: 'approved', remarks: 'Strategic supplier. Margin acceptable at 12% discount. Proceed.', timestamp: new Date(Date.now() - 4 * 86400000).toISOString() },
-    ],
-  },
-  {
-    id: 'appr-004', quotationNumber: 'QT-2026-000198', rfqNumber: 'RFQ-2026-000198',
-    customerName: 'Ishita Kapoor', customerEmail: 'ishita@kapoorbots.com', customerCompany: 'Kapoor Robotics Labs',
-    productName: 'Raspberry Pi 4 Model B (4 GB RAM)', productType: 'existing',
-    quantity: 25, unitPrice: 5200, discountPct: 8, taxPct: 18, shippingCharge: 0,
-    deliveryLocation: 'Chennai, Tamil Nadu 600001', expectedDelivery: '2026-09-20',
-    validUntil: new Date(Date.now() + 12 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. GST invoice provided.\n2. Free shipping for orders above \u20B91,00,000.',
-    status: 'hod_review',
-    sentAt: new Date(Date.now() - 4 * 3600000).toISOString(),
-    updatedAt: new Date(Date.now() - 4 * 3600000).toISOString(),
-    history: [],
-  },
-  {
-    id: 'appr-005', quotationNumber: 'QT-2026-000287', rfqNumber: 'RFQ-2026-000287',
-    customerName: 'Meera Nair', customerEmail: 'meera@industrialpulse.co', customerCompany: 'Industrial Pulse Solutions',
-    productName: 'Industrial BLDC Motor Controller (48V / 30A)', productType: 'existing',
-    quantity: 10, unitPrice: 8500, discountPct: 5, taxPct: 18, shippingCharge: 600,
-    deliveryLocation: 'Delhi NCR 110001', expectedDelivery: new Date(Date.now() + 22 * 86400000).toISOString().split('T')[0],
-    validUntil: new Date(Date.now() + 8 * 86400000).toISOString().split('T')[0],
-    termsNotes: '1. Technical datasheet on request.\n2. 30-day warranty on manufacturing defects.',
-    status: 'po_ready',
-    sentAt: new Date(Date.now() - 20 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
-    history: [
-      { id: 'h-004', role: 'HOD', action: 'approved', remarks: 'Pricing fair. Industrial-grade product needed urgently.', timestamp: new Date(Date.now() - 15 * 86400000).toISOString() },
-      { id: 'h-005', role: 'Director', action: 'approved', remarks: 'Approved. Fits strategic vendor preference.', timestamp: new Date(Date.now() - 10 * 86400000).toISOString() },
-      { id: 'h-006', role: 'Accountant', action: 'approved', remarks: 'Budget available. GST verified. Payment terms: 50% advance. PO can be raised.', timestamp: new Date(Date.now() - 2 * 86400000).toISOString() },
-    ],
-  },
-  {
-    id: 'appr-006', quotationNumber: 'QT-2026-000174', rfqNumber: 'RFQ-2026-000174',
-    customerName: 'Nikhil Singh', customerEmail: 'n.singh@smartenergy.net', customerCompany: 'SmartEnergy Systems',
-    productName: 'Hall Effect Current Sensor Module (200 A)', productType: 'custom',
-    quantity: 30, unitPrice: 1400, discountPct: 0, taxPct: 18, shippingCharge: 400,
-    deliveryLocation: 'Mumbai, Maharashtra 400001', expectedDelivery: '2026-08-10',
-    validUntil: '2026-08-15',
-    termsNotes: '1. 100% advance for custom sensors.\n2. Lead time 18 business days.',
-    status: 'rejected',
-    sentAt: new Date(Date.now() - 18 * 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 12 * 86400000).toISOString(),
-    history: [
-      { id: 'h-007', role: 'HOD', action: 'rejected', remarks: 'Supplier not on approved vendor list. Cannot proceed without compliance clearance.', timestamp: new Date(Date.now() - 12 * 86400000).toISOString() },
-    ],
-  },
-];
 
-const SEED_DATA: ApprovableQuotation[] = BASE.map((q) => ({ ...q, grandTotal: calcTotal(q) }));
 
 // ─── Shared sub-components (mirror AdminRFQs.tsx patterns) ────────────────────
 
@@ -745,37 +655,85 @@ function DetailPanel({ quotation, activeRole, onBack, onApprove, onReject }: Det
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function AdminApprovals() {
-  const [quotations, setQuotations] = React.useState<ApprovableQuotation[]>(SEED_DATA);
+  const [quotations, setQuotations] = React.useState<ApprovableQuotation[]>([]);
   const [activeRole, setActiveRole] = React.useState<ApproverRole>('HOD');
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [search, setSearch]         = React.useState('');
+  const [loading, setLoading]       = React.useState(true);
+
+  const loadData = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await adminQuotationApi.listQuotations();
+      const mapped = (Array.isArray(res) ? res : (res as any).results ?? [])
+        .filter((q: any) => q.approval != null)
+        .map((q: any) => ({
+          id: q.id.toString(),
+          quotationNumber: q.quotation_number,
+          rfqNumber: q.rfq_number,
+          customerName: q.customer_name,
+          customerEmail: q.customer_email,
+          customerCompany: q.customer_name,
+          productName: q.product_name,
+          productType: q.product_type,
+          quantity: q.quantity,
+          unitPrice: parseFloat(q.unit_price),
+          discountPct: parseFloat(q.discount_pct),
+          taxPct: parseFloat(q.tax_pct),
+          shippingCharge: parseFloat(q.shipping_charge),
+          grandTotal: q.grand_total,
+          deliveryLocation: q.delivery_location,
+          expectedDelivery: q.expected_delivery || '',
+          validUntil: q.valid_until || '',
+          termsNotes: q.terms_notes,
+          status: q.approval!.approval_status as ApprovalStatus,
+          sentAt: q.sent_at || q.created_at,
+          updatedAt: q.approval!.updated_at,
+          history: q.approval!.entries.map((e: any) => ({
+            id: e.id.toString(),
+            role: e.approver_role as ApproverRole,
+            action: e.action,
+            remarks: e.remarks,
+            timestamp: e.timestamp,
+          })),
+        }));
+      setQuotations(mapped);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load approvals');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const handleApprove = (id: string, role: ApproverRole, remarks: string) => {
-    setQuotations((prev) => prev.map((q) => {
-      if (q.id !== id) return q;
-      const next = NEXT_STATUS[q.status];
-      const entry: ApprovalEntry = {
-        id: `hist-${Date.now()}`, role, action: 'approved', remarks, timestamp: new Date().toISOString(),
-      };
-      const nextLabel = next ? APPROVAL_STATUS_CONFIG[next].queue ?? 'PO Ready' : 'PO Ready';
-      toast.success(`${q.quotationNumber} approved by ${role} \u2192 forwarded to ${nextLabel}`);
-      return { ...q, status: (next ?? 'po_ready') as ApprovalStatus, history: [...q.history, entry], updatedAt: new Date().toISOString() };
-    }));
-    setSelectedId(null);
+  const handleApprove = async (id: string, role: ApproverRole, remarks: string) => {
+    try {
+      await adminQuotationApi.approveQuotation(Number(id), remarks);
+      toast.success(`Quotation approved by ${role}`);
+      await loadData();
+      setSelectedId(null);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to approve quotation');
+    }
   };
 
-  const handleReject = (id: string, role: ApproverRole, remarks: string) => {
-    setQuotations((prev) => prev.map((q) => {
-      if (q.id !== id) return q;
-      const entry: ApprovalEntry = {
-        id: `hist-${Date.now()}`, role, action: 'rejected', remarks, timestamp: new Date().toISOString(),
-      };
-      toast.info(`${q.quotationNumber} rejected by ${role}`);
-      return { ...q, status: 'rejected', history: [...q.history, entry], updatedAt: new Date().toISOString() };
-    }));
-    setSelectedId(null);
+  const handleReject = async (id: string, role: ApproverRole, remarks: string) => {
+    try {
+      await adminQuotationApi.rejectApproval(Number(id), remarks);
+      toast.info(`Quotation rejected by ${role}`);
+      await loadData();
+      setSelectedId(null);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to reject quotation');
+    }
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────────
@@ -913,7 +871,11 @@ export function AdminApprovals() {
       </div>
 
       {/* Table */}
-      {filtered.length === 0 ? (
+      {loading ? (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
+          <p className="font-semibold text-[var(--text)]">Loading...</p>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--background-card)] py-16 text-center">
           <ClipboardList size={32} className="mx-auto text-[var(--text-subtle)] mb-3" />
           <p className="font-semibold text-[var(--text)]">

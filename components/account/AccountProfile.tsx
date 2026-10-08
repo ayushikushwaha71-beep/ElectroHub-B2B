@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form';
 import { User, Mail, Calendar, Shield, Pencil, Check } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth, type AuthUser } from '@/lib/providers/AuthProvider';
+import { api } from '@/lib/api';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { toast } from '@/components/ui/Toast';
@@ -42,23 +43,33 @@ export function AccountProfile() {
 
   const onSubmit = async (data: ProfileForm) => {
     setIsSaving(true);
-    // Simulate API call
-    await new Promise((res) => setTimeout(res, 800));
-
-    // Update localStorage (mock)
     try {
+      const accessToken = typeof window !== 'undefined'
+        ? localStorage.getItem('electrohub_access_token') ?? ''
+        : '';
+
+      // Split name into first/last
+      const parts     = data.name.trim().split(/\s+/);
+      const firstName = parts[0] ?? '';
+      const lastName  = parts.slice(1).join(' ');
+
+      await api.patch('/profile/', { first_name: firstName, last_name: lastName }, { token: accessToken });
+
+      // Update local auth state
       const raw = localStorage.getItem('electrohub_user');
       if (raw) {
-        const parsed = JSON.parse(raw);
+        const parsed  = JSON.parse(raw);
         const updated = { ...parsed, name: data.name };
         localStorage.setItem('electrohub_user', JSON.stringify(updated));
         setSavedUser(updated);
       }
-    } catch { /* ignore */ }
-
-    setIsSaving(false);
-    setIsEditing(false);
-    toast.success('Profile updated successfully!');
+      toast.success('Profile updated successfully!');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update profile.');
+    } finally {
+      setIsSaving(false);
+      setIsEditing(false);
+    }
   };
 
   const handleCancel = () => {

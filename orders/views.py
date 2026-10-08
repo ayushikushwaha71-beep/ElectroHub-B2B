@@ -10,6 +10,13 @@ from .serializers import (
 )
 
 
+class IsAdmin(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated
+            and request.user.role.lower() == 'admin'
+        )
+
 class IsCustomer(permissions.BasePermission):
     def has_permission(self, request, view):
         return bool(
@@ -61,12 +68,39 @@ class OrderDetailView(generics.RetrieveAPIView):
             return VendorOrderSerializer
         return OrderSerializer
 
+@api_view(['POST'])
+@permission_classes([IsCustomer])
+def mark_order_completed(request, pk):
+    order = Order.objects.filter(pk=pk, customer=request.user).first()
+    if not order:
+        return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+    if order.status != 'delivered':
+        return Response({'detail': 'Order must be delivered before it can be completed.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    order.status = 'completed'
+    order.save(update_fields=['status', 'updated_at'])
+    return Response(OrderSerializer(order).data)
+
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
         user = self.request.user
         if user.is_authenticated and user.role.lower() == 'vendor':
             ctx['vendor_profile'] = getattr(user, 'vendor_profile', None)
         return ctx
+
+
+# ── Admin: list all orders and update status ─────────────────────────────────
+class AdminOrderListCreateView(generics.ListAPIView):
+    permission_classes = [IsAdmin]
+    serializer_class = OrderSerializer
+
+    def get_queryset(self):
+        return Order.objects.prefetch_related('items__product', 'items__vendor').order_by('-created_at')
+
+class AdminOrderDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAdmin]
+    serializer_class = OrderSerializer
+    queryset = Order.objects.all()
 
 
 def _require_approved_vendor(user):

@@ -582,3 +582,40 @@ img {
     scroll-behavior: auto !important;
   }
 }
+
+/* ─── Print Styles (A4 Invoice Layout) ──────────────────────────────────────── */
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #inv-print-root, #inv-print-root * {
+    visibility: visible;
+  }
+  #inv-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    /* Reset borders and shadows for print */
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  table {
+    page-break-inside: auto;
+  }
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+}
