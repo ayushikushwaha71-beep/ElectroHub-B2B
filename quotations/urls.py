@@ -30,6 +30,10 @@ urlpatterns = [
     path('<int:pk>/shipment/', views.customer_shipment_status, name='quotation-shipment-status'),
 
     # ── Vendor: Assigned RFQ / QuotationItem requests ────────────────────────
+    path('vendor/purchase-orders/',                  views.VendorPurchaseOrderListView.as_view(), name='vendor-po-list'),
+    path('vendor/purchase-orders/<int:pk>/status/',  views.VendorPurchaseOrderStatusUpdateView.as_view(), name='vendor-po-status'),
+    path('vendor/purchase-orders/<int:pk>/proforma/', views.VendorProformaInvoiceCreateView.as_view(), name='vendor-po-proforma'),
+    path('vendor/purchase-orders/<int:pk>/shipment/', views.VendorShipmentUpdateView.as_view(), name='vendor-po-shipment'),
     path('vendor/requests/',                         views.VendorRequestListView.as_view(), name='vendor-request-list'),
     path('vendor/requests/<int:pk>/',                views.VendorRequestDetailView.as_view(), name='vendor-request-detail'),
     path('vendor/requests/<int:item_pk>/quote/',     views.vendor_submit_quote,              name='vendor-request-quote'),

@@ -40,6 +40,7 @@ import {
   Stamp,
   Truck,
   User,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { Badge }  from '@/components/ui/Badge';
@@ -50,19 +51,24 @@ import { toast }  from '@/components/ui/Toast';
 import { adminQuotationApi } from '@/lib/quotation-api';
 import type { ApprovableQuotation, ApproverRole, ApprovalStatus } from './AdminApprovals';
 
-export type POStatus = 'pending' | 'issued' | 'acknowledged';
 
-const PO_STATUS_CONFIG: Record<POStatus, { label: string; variant: 'warning' | 'success' | 'info'; icon: React.ElementType }> = {
+
+export type POStatus = 'pending' | 'issued' | 'acknowledged' | 'accepted' | 'rejected' | 'processing';
+
+const PO_STATUS_CONFIG: Record<POStatus, { label: string; variant: 'warning' | 'success' | 'info' | 'danger'; icon: React.ElementType }> = {
   pending:      { label: 'Pending Issuance', variant: 'warning', icon: Clock         },
-  issued:       { label: 'PO Issued',        variant: 'success', icon: CheckCircle2  },
-  acknowledged: { label: 'Acknowledged',     variant: 'info',    icon: Stamp          },
+  issued:       { label: 'PO Issued',        variant: 'info',    icon: CheckCircle2  },
+  acknowledged: { label: 'Acknowledged',     variant: 'info',    icon: Stamp         },
+  accepted:     { label: 'Accepted',         variant: 'success', icon: CheckCircle2  },
+  rejected:     { label: 'Rejected',         variant: 'danger',  icon: XCircle       },
+  processing:   { label: 'Processing',       variant: 'success', icon: Package       },
 };
 
 // ─── PO Issue log entry ───────────────────────────────────────────────────────
 
 export interface POIssueEntry {
   id:        string;
-  action:    'issued' | 'acknowledged';
+  action:    string;
   by:        string;
   notes:     string;
   timestamp: string;
@@ -381,29 +387,38 @@ function POLog({ log }: { log: POIssueEntry[] }) {
     return <p className="text-sm text-[var(--text-subtle)] italic py-2">PO not yet issued.</p>;
   }
 
-  const ACTION_ICON: Record<POIssueEntry['action'], React.ElementType> = {
+  const ACTION_ICON: Record<string, React.ElementType> = {
     issued:       Stamp,
     acknowledged: CheckCircle2,
+    accepted:     CheckCircle2,
+    rejected:     XCircle,
+    processing:   Package,
   };
-  const ACTION_COLOR: Record<POIssueEntry['action'], string> = {
+  const ACTION_COLOR: Record<string, string> = {
     issued:       'text-[var(--primary)]',
     acknowledged: 'text-[var(--success)]',
+    accepted:     'text-[var(--success)]',
+    rejected:     'text-[var(--danger)]',
+    processing:   'text-[var(--primary)]',
   };
-  const ACTION_BG: Record<POIssueEntry['action'], string> = {
+  const ACTION_BG: Record<string, string> = {
     issued:       'bg-[var(--primary)]/10',
     acknowledged: 'bg-[var(--success)]/10',
+    accepted:     'bg-[var(--success)]/10',
+    rejected:     'bg-[var(--danger)]/10',
+    processing:   'bg-[var(--primary)]/10',
   };
 
   return (
     <div className="space-y-3">
       {log.map((entry, idx) => {
-        const Icon   = ACTION_ICON[entry.action];
+        const Icon   = ACTION_ICON[entry.action] || Stamp;
         const isLast = idx === log.length - 1;
         return (
           <div key={entry.id} className="flex gap-3">
             <div className="flex flex-col items-center">
-              <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0', ACTION_BG[entry.action])}>
-                <Icon size={14} className={ACTION_COLOR[entry.action]} />
+              <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0', ACTION_BG[entry.action] || 'bg-[var(--border)]')}>
+                <Icon size={14} className={ACTION_COLOR[entry.action] || 'text-[var(--text)]'} />
               </div>
               {!isLast && <div className="w-0.5 flex-1 bg-[var(--border)] mt-1" />}
             </div>
@@ -615,7 +630,7 @@ export function AdminPurchaseOrder({
         adminQuotationApi.listPOs()
       ]);
 
-      const poReadyQuots = quotRes.data
+      const poReadyQuots = quotRes
         .filter((q) => q.approval?.approval_status === 'po_ready')
         .map((q) => ({
           id: q.id.toString(),
@@ -651,7 +666,7 @@ export function AdminPurchaseOrder({
       setQuotations(poReadyQuots);
 
       const newRecords: Record<string, PORecord> = {};
-      const posByQuotId = new Map(poRes.data.map(po => [po.quotation.toString(), po]));
+      const posByQuotId = new Map(poRes.map(po => [po.quotation.toString(), po]));
 
       for (const q of poReadyQuots) {
         const existingPo = posByQuotId.get(q.id);
@@ -702,6 +717,18 @@ export function AdminPurchaseOrder({
       toast.error('Failed to issue PO');
     }
   };
+
+  const filtered = React.useMemo(() => {
+    const s = search.toLowerCase();
+    return quotations.filter((q) =>
+      q.quotationNumber.toLowerCase().includes(s) ||
+      q.customerName.toLowerCase().includes(s) ||
+      q.customerCompany.toLowerCase().includes(s)
+    );
+  }, [quotations, search]);
+
+  const selectedQ = selectedId ? quotations.find((q) => q.id === selectedId) : null;
+  const selectedRec = selectedId ? records[selectedId] : null;
 
   if (selectedQ && selectedRec) {
     return (

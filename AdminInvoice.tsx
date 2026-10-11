@@ -58,15 +58,16 @@ import type { ApprovableQuotation, ApproverRole, ApprovalStatus } from './AdminA
 
 // ─── Invoice status ───────────────────────────────────────────────────────────
 
-export type InvoiceStatus = 'draft' | 'sent' | 'payment_confirmed';
+export type InvoiceStatus = 'draft' | 'sent' | 'partially_paid' | 'payment_confirmed';
 
 const INV_STATUS_CONFIG: Record<
   InvoiceStatus,
   { label: string; variant: 'default' | 'warning' | 'info' | 'success'; icon: React.ElementType }
 > = {
   draft:             { label: 'Draft',              variant: 'default', icon: FileText    },
-  sent:              { label: 'Invoice Sent',        variant: 'info',    icon: Send        },
-  payment_confirmed: { label: 'Payment Confirmed',   variant: 'success', icon: CheckCircle2 },
+  sent:              { label: 'Invoice Sent',       variant: 'info',    icon: Send        },
+  partially_paid:    { label: 'Partially Paid',     variant: 'warning', icon: Banknote    },
+  payment_confirmed: { label: 'Payment Confirmed',  variant: 'success', icon: CheckCircle2 },
 };
 
 // ─── Invoice log entry ────────────────────────────────────────────────────────
@@ -191,7 +192,9 @@ export function InvoiceDocument({
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-bold uppercase tracking-widest text-[var(--primary)]">ElectroHub</span>
             <span className="text-[var(--text-subtle)]">·</span>
-            <span className="text-xs text-[var(--text-subtle)]">Tax Invoice</span>
+            <span className="text-xs text-[var(--text-subtle)]">
+              {(record as any).isProforma ? 'Proforma Invoice' : 'Tax Invoice'}
+            </span>
           </div>
           <h2 className="text-xl font-bold font-display text-[var(--text)] font-mono">{record.invoiceNumber}</h2>
           <p className="text-xs text-[var(--text-subtle)] mt-0.5">

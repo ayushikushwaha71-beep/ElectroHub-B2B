@@ -304,7 +304,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
 
   const invoice = deriveInvoiceDetails(quotation);
   const isPaid  = quotation.status === 'payment_confirmed';
-  const isPartiallyPaid = false;
+  const isPartiallyPaid = quotation.status === 'partially_paid' || invoice.status === 'partially_paid';
 
   const handlePayLink = () => {
     setPayLink(true);
@@ -446,7 +446,7 @@ export function B2BPayment({ quotation, onPaymentSubmit, onNavigateToOrders }: B
                 <CopyableField label="Account No."  value="50200012345678" />
                 <CopyableField label="IFSC Code"    value="HDFC0001234" />
                 <CopyableField label="Account Name" value="ElectroHub Pvt. Ltd." />
-                <CopyableField label="Amount"       value={fmtINR(invoice.grand_total)} />
+                <CopyableField label="Amount"       value={fmtINR(invoice.pendingAmount)} />
                 <CopyableField label="Ref / Narr."  value={invoice.invoiceNumber} />
               </div>
               <p className="text-xs text-[var(--text-subtle)] mt-3 italic">

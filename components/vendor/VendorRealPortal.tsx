@@ -7,7 +7,7 @@ import { useForm } from 'react-hook-form';
 import {
   Building2, CheckCircle2, ClipboardList, LayoutDashboard, LogOut, Package, Pencil,
   Plus, ShieldCheck, ShoppingBag, Store, Trash2, Users, XCircle, Clock,
-  Save, X as XIcon, ChevronDown, ChevronUp, Send, AlertCircle, CalendarClock,
+  Save, X as XIcon, ChevronDown, ChevronUp, Send, AlertCircle, CalendarClock, FileText,
 } from 'lucide-react';
 import { Button }       from '@/components/ui/Button';
 import { Card }         from '@/components/ui/Card';
@@ -105,6 +105,7 @@ function Shell({ children, active }: { children: React.ReactNode; active: string
     ['Add Product',      '/vendor/products/add',  Plus],
     ['Orders',           '/vendor/orders',        ShoppingBag],
     ['Dealer Requests',  '/vendor/requests',      ClipboardList],
+    ['Purchase Orders',  '/vendor/po',            FileText],
     ['Business Profile', '/vendor/profile',       Building2],
   ] as const;
   return (
@@ -1567,3 +1568,251 @@ export function VendorRequests() {
   );
 }
 
+// ─── Real Vendor Purchase Orders ─────────────────────────────────────────────
+export function RealVendorPurchaseOrders() {
+  const [pos, setPos] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState('');
+  
+  const [shipmentModalOpen, setShipmentModalOpen] = React.useState(false);
+  const [shipmentPOId, setShipmentPOId] = React.useState<number | null>(null);
+  const [shipmentForm, setShipmentForm] = React.useState({ status: 'processing', carrier: '', tracking_number: '' });
+
+  React.useEffect(() => {
+    api.get<any[]>('/quotations/vendor/purchase-orders/')
+      .then((res) => {
+        setPos(Array.isArray(res) ? res : (res as any).results ?? []);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Unable to load POs.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const updateStatus = async (id: number, newStatus: string) => {
+    try {
+      const updated = await api.patch<any>(`/quotations/vendor/purchase-orders/${id}/status/`, { status: newStatus }, { token: token() });
+      setPos(pos.map(po => po.id === id ? updated : po));
+      toast.success(`PO status updated to ${newStatus}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Unable to update status.');
+    }
+  };
+
+  const generatePi = async (poId: number) => {
+    try {
+      const updated = await api.post<any>(`/quotations/vendor/purchase-orders/${poId}/proforma/`, {}, { token: token() });
+      setPos(pos.map(po => {
+        if (po.id === poId) {
+          return { ...po, quotation_data: { ...po.quotation_data, invoice: updated } };
+        }
+        return po;
+      }));
+      toast.success('Proforma Invoice generated');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to generate PI');
+    }
+  };
+
+  const handleShipmentSubmit = async () => {
+    if (!shipmentPOId) return;
+    try {
+      const updatedShipment = await api.post<any>(`/quotations/vendor/purchase-orders/${shipmentPOId}/shipment/`, shipmentForm, { token: token() });
+      setPos(pos.map(po => {
+        if (po.id === shipmentPOId) {
+          return { ...po, shipment: updatedShipment };
+        }
+        return po;
+      }));
+      toast.success('Shipment updated');
+      setShipmentModalOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update shipment');
+    }
+  };
+
+  return (
+    <Guard>
+      <Shell active="Purchase Orders">
+        <h2 className="mb-5 text-xl font-bold text-[var(--text)]">Purchase Orders</h2>
+        <p className="mb-5 text-sm text-[var(--text-muted)]">
+          These are the B2B Purchase Orders generated from accepted quotations containing your items.
+        </p>
+        {error && <p className="mb-4 text-sm text-[var(--danger)]">{error}</p>}
+        {loading && <p className="mb-4 text-sm text-[var(--text-muted)]">Loading purchase orders…</p>}
+        <Card className="overflow-hidden">
+          {pos.length === 0 && !loading ? (
+            <div className="py-16 text-center text-sm text-[var(--text-muted)]">
+              No purchase orders yet.
+            </div>
+          ) : (
+            <div className="divide-y divide-[var(--border)]">
+              {pos.map((po) => {
+                const qd = po.quotation_data;
+                const statusColor = po.status === 'issued' ? 'success' : po.status === 'acknowledged' ? 'info' : 'warning';
+                return (
+                  <div key={po.id} className="p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-[var(--text)]">PO {po.po_number}</p>
+                        <p className="text-xs text-[var(--text-muted)]">
+                          {new Date(po.created_at).toLocaleDateString('en-IN')} · Ref: {qd.quotation_number}
+                        </p>
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        <Badge variant={statusColor}>{po.status.toUpperCase()}</Badge>
+                        {qd.invoice && qd.invoice.status !== 'draft' && (
+                          <Badge variant={qd.invoice.status === 'payment_confirmed' ? 'success' : qd.invoice.status === 'partially_paid' ? 'warning' : 'info'}>
+                            PAY: {qd.invoice.status.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        )}
+                        {po.shipment && (
+                          <Badge variant={po.shipment.status === 'delivered' ? 'success' : po.shipment.status === 'shipped' ? 'info' : 'warning'}>
+                            SHIP: {po.shipment.status.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        )}
+                      </div>
+                      <span className="font-semibold text-sm text-[var(--text)]">
+                        {formatINR(Number(qd.grand_total))}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm bg-[var(--background-alt)] p-3 rounded-lg border border-[var(--border)]">
+                      <div>
+                        <p className="font-medium text-[var(--text)] mb-1">Customer Details</p>
+                        <p className="text-[var(--text-muted)]">{qd.customer_name}</p>
+                        <p className="text-[var(--text-muted)]">{qd.customer_email}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-[var(--text)] mb-1">Delivery Details</p>
+                        <p className="text-[var(--text-muted)]">{qd.delivery_location}</p>
+                        <p className="text-[var(--text-muted)]">By: {qd.expected_delivery ? new Date(qd.expected_delivery).toLocaleDateString('en-IN') : 'N/A'}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Products</p>
+                      <table className="w-full text-sm">
+                        <thead className="text-[var(--text-muted)] border-b border-[var(--border)]">
+                          <tr>
+                            <th className="text-left py-1 font-medium">Item</th>
+                            <th className="text-right py-1 font-medium">Qty</th>
+                            <th className="text-right py-1 font-medium">Price</th>
+                            <th className="text-right py-1 font-medium">GST %</th>
+                            <th className="text-right py-1 font-medium">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--border)] text-[var(--text)]">
+                          {qd.items.map((item: any, i: number) => (
+                            <tr key={i}>
+                              <td className="py-2">{item.product_name}</td>
+                              <td className="text-right py-2">{item.quantity}</td>
+                              <td className="text-right py-2">{formatINR(Number(item.unit_price))}</td>
+                              <td className="text-right py-2">{item.tax_pct}%</td>
+                              <td className="text-right py-2 font-medium">{formatINR(Number(item.line_total_with_tax))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="mt-5 flex gap-3">
+                      {['pending', 'issued', 'acknowledged'].includes(po.status) && (
+                        <>
+                          <Button size="sm" variant="primary" onClick={() => updateStatus(po.id, 'accepted')} leftIcon={<CheckCircle2 size={14} />}>Accept PO</Button>
+                          <Button size="sm" variant="secondary" onClick={() => updateStatus(po.id, 'rejected')} leftIcon={<XCircle size={14} />}>Reject</Button>
+                        </>
+                      )}
+                      {po.status === 'accepted' && (
+                        <Button size="sm" variant="primary" onClick={() => updateStatus(po.id, 'processing')} leftIcon={<Clock size={14} />}>Mark as Processing</Button>
+                      )}
+                      
+                      {['accepted', 'processing'].includes(po.status) && (
+                        qd.invoice ? (
+                          <Button 
+                            size="sm" 
+                            variant="secondary" 
+                            leftIcon={<FileText size={14} />}
+                            onClick={() => window.open(`/api/quotations/${qd.id}/invoice/pdf/?token=${token()}`, '_blank')}
+                          >
+                            {qd.invoice.is_proforma ? 'Download PI PDF' : 'Download Invoice PDF'}
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="secondary" onClick={() => generatePi(po.id)} leftIcon={<FileText size={14} />}>
+                            Generate Proforma Invoice
+                          </Button>
+                        )
+                      )}
+                      {['processing'].includes(po.status) && po.shipment?.status !== 'delivered' && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => {
+                            setShipmentPOId(po.id);
+                            setShipmentForm({
+                              status: po.shipment?.status || 'processing',
+                              carrier: po.shipment?.carrier || '',
+                              tracking_number: po.shipment?.tracking_number || ''
+                            });
+                            setShipmentModalOpen(true);
+                          }}
+                        >
+                          Update Shipment
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </Shell>
+
+      {/* Shipment Modal */}
+      {shipmentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="bg-[var(--surface)] w-full max-w-md rounded-2xl p-6 shadow-2xl">
+            <h3 className="text-xl font-bold mb-4 text-[var(--text)]">Update Shipment</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Status</label>
+                <select
+                  value={shipmentForm.status}
+                  onChange={e => setShipmentForm(f => ({ ...f, status: e.target.value }))}
+                  className="w-full rounded-lg bg-[var(--background)] border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+                >
+                  <option value="processing">Processing</option>
+                  <option value="ready_to_ship">Ready to Ship</option>
+                  <option value="shipped">Shipped</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Carrier / Courier</label>
+                <input
+                  type="text"
+                  value={shipmentForm.carrier}
+                  onChange={e => setShipmentForm(f => ({ ...f, carrier: e.target.value }))}
+                  className="w-full rounded-lg bg-[var(--background)] border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+                  placeholder="e.g. BlueDart, FedEx"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Tracking Number</label>
+                <input
+                  type="text"
+                  value={shipmentForm.tracking_number}
+                  onChange={e => setShipmentForm(f => ({ ...f, tracking_number: e.target.value }))}
+                  className="w-full rounded-lg bg-[var(--background)] border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="secondary" onClick={() => setShipmentModalOpen(false)}>Cancel</Button>
+              <Button variant="primary" onClick={handleShipmentSubmit}>Save Shipment</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Guard>
+  );
+}

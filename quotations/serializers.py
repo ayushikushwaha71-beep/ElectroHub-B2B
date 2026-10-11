@@ -312,11 +312,21 @@ class POIssueEntrySerializer(serializers.ModelSerializer):
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     log            = POIssueEntrySerializer(many=True, read_only=True)
     quotation_data = QuotationSerializer(source='quotation', read_only=True)
+    shipment       = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
-        fields = ('id', 'po_number', 'quotation', 'quotation_data', 'status', 'issued_at', 'log', 'created_at')
-        read_only_fields = ('id', 'po_number', 'quotation_data', 'issued_at', 'log', 'created_at')
+        fields = ('id', 'po_number', 'quotation', 'quotation_data', 'status', 'issued_at', 'log', 'created_at', 'shipment')
+        read_only_fields = ('id', 'po_number', 'quotation_data', 'issued_at', 'log', 'created_at', 'shipment')
+
+    def get_shipment(self, obj):
+        try:
+            if hasattr(obj, 'shipment') and obj.shipment:
+                from .serializers import ShipmentSerializer
+                return ShipmentSerializer(obj.shipment).data
+        except Exception:
+            pass
+        return None
 
 
 # ── Invoice ───────────────────────────────────────────────────────────────────
@@ -339,7 +349,7 @@ class InvoiceSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model  = Invoice
         fields = (
-            'id', 'invoice_number', 'status',
+            'id', 'invoice_number', 'status', 'is_proforma',
             'due_date', 'gstin_buyer', 'hsn_code',
             'paid_at', 'utr_number',
             'created_at', 'updated_at',
@@ -355,7 +365,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model  = Invoice
         fields = (
             'id', 'invoice_number', 'quotation', 'quotation_data', 'purchase_order',
-            'status', 'due_date', 'gstin_buyer', 'hsn_code',
+            'status', 'is_proforma', 'due_date', 'gstin_buyer', 'hsn_code',
             'paid_at', 'utr_number',
             'grand_total', 'log',
             'created_at', 'updated_at',

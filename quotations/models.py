@@ -45,6 +45,9 @@ class POStatus(models.TextChoices):
     PENDING      = 'pending',      'Pending Issuance'
     ISSUED       = 'issued',       'PO Issued'
     ACKNOWLEDGED = 'acknowledged', 'Acknowledged'
+    ACCEPTED     = 'accepted',     'Accepted'
+    REJECTED     = 'rejected',     'Rejected'
+    PROCESSING   = 'processing',   'Processing'
 
 
 class InvoiceStatus(models.TextChoices):
@@ -299,7 +302,13 @@ class PurchaseOrder(models.Model):
 
 
 class POIssueEntry(models.Model):
-    ACTION_CHOICES = [('issued', 'Issued'), ('acknowledged', 'Acknowledged')]
+    ACTION_CHOICES = [
+        ('issued', 'Issued'), 
+        ('acknowledged', 'Acknowledged'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('processing', 'Processing')
+    ]
 
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name='log'
@@ -339,6 +348,7 @@ class Invoice(models.Model):
         choices=InvoiceStatus.choices,
         default=InvoiceStatus.DRAFT,
     )
+    is_proforma    = models.BooleanField(default=False)
 
     due_date       = models.DateField(null=True, blank=True)
     gstin_buyer    = models.CharField(max_length=20, blank=True)
@@ -365,7 +375,8 @@ class Invoice(models.Model):
         if not self.invoice_number:
             year  = timezone.now().year
             count = Invoice.objects.filter(created_at__year=year).count() + 1
-            self.invoice_number = f'INV-{year}-{count:06d}'
+            prefix = 'PI' if self.is_proforma else 'INV'
+            self.invoice_number = f'{prefix}-{year}-{count:06d}'
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -588,12 +599,10 @@ class Payment(models.Model):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ShipmentStatus(models.TextChoices):
-    PENDING     = 'pending',     'Pending Dispatch'
-    DISPATCHED  = 'dispatched',  'Dispatched'
-    IN_TRANSIT  = 'in_transit',  'In Transit'
-    DELIVERED   = 'delivered',   'Delivered'
-    RETURNED    = 'returned',    'Returned'
-    CANCELLED   = 'cancelled',   'Cancelled'
+    PROCESSING     = 'processing',    'Processing'
+    READY_TO_SHIP  = 'ready_to_ship', 'Ready to Ship'
+    SHIPPED        = 'shipped',       'Shipped'
+    DELIVERED      = 'delivered',     'Delivered'
 
 
 class Shipment(models.Model):
@@ -614,7 +623,7 @@ class Shipment(models.Model):
     status            = models.CharField(
         max_length=15,
         choices=ShipmentStatus.choices,
-        default=ShipmentStatus.PENDING,
+        default=ShipmentStatus.PROCESSING,
     )
 
     # Who created / last updated the shipment record

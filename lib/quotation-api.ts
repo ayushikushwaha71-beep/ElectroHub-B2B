@@ -176,7 +176,7 @@ export interface PurchaseOrder {
   po_number:      string;
   quotation:      number;
   quotation_data: Quotation;
-  status:         'pending' | 'issued' | 'acknowledged';
+  status:         'pending' | 'issued' | 'acknowledged' | 'accepted' | 'rejected' | 'processing';
   issued_at?:     string;
   log:            Array<{ id: number; action: string; actor_name: string; notes: string; timestamp: string }>;
   created_at:     string;
