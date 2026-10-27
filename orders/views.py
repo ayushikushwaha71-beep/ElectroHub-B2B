@@ -68,6 +68,13 @@ class OrderDetailView(generics.RetrieveAPIView):
             return VendorOrderSerializer
         return OrderSerializer
 
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        user = self.request.user
+        if user.is_authenticated and user.role.lower() == 'vendor':
+            ctx['vendor_profile'] = getattr(user, 'vendor_profile', None)
+        return ctx
+
 @api_view(['POST'])
 @permission_classes([IsCustomer])
 def mark_order_completed(request, pk):
@@ -80,13 +87,6 @@ def mark_order_completed(request, pk):
     order.status = 'completed'
     order.save(update_fields=['status', 'updated_at'])
     return Response(OrderSerializer(order).data)
-
-    def get_serializer_context(self):
-        ctx = super().get_serializer_context()
-        user = self.request.user
-        if user.is_authenticated and user.role.lower() == 'vendor':
-            ctx['vendor_profile'] = getattr(user, 'vendor_profile', None)
-        return ctx
 
 
 # ── Admin: list all orders and update status ─────────────────────────────────

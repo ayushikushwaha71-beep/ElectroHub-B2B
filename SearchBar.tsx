@@ -62,12 +62,54 @@ export function SearchBar({
 }: SearchBarProps) {
   const [internalValue, setInternalValue] = React.useState(defaultValue ?? '');
   const [isFocused,     setIsFocused]     = React.useState(false);
+  const [isListening,   setIsListening]   = React.useState(false);
   const inputRef  = React.useRef<HTMLInputElement>(null);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
 
   const displayValue = value !== undefined ? value : internalValue;
   const showSuggestions = isFocused && (suggestions.length > 0 || isLoading);
   const cfg = sizeConfig[size];
+
+  const handleVoiceSearch = () => {
+    if (typeof window === 'undefined') return;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-IN';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0]?.[0]?.transcript ?? '';
+        if (transcript) {
+          setInternalValue(transcript);
+          onChange?.(transcript);
+          onSearch?.(transcript);
+        }
+      };
+
+      recognition.onerror = () => {
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  };
 
   // Close on outside click
   React.useEffect(() => {
@@ -172,15 +214,17 @@ export function SearchBar({
           {showVoice && !displayValue && (
             <button
               type="button"
+              onClick={handleVoiceSearch}
               className={cn(
-                'p-1 rounded-md',
-                'text-[var(--text-subtle)] hover:text-[var(--primary)]',
-                'hover:bg-[var(--surface-hover)]',
-                'transition-colors'
+                'p-1 rounded-md transition-colors',
+                isListening
+                  ? 'text-red-500 bg-red-50 animate-pulse dark:bg-red-950/40'
+                  : 'text-[var(--text-subtle)] hover:text-[var(--primary)] hover:bg-[var(--surface-hover)]'
               )}
-              aria-label="Voice search"
+              aria-label={isListening ? 'Listening...' : 'Voice search'}
+              title={isListening ? 'Listening...' : 'Voice search'}
             >
-              <Mic size={cfg.iconSize - 2} />
+              <Mic size={cfg.iconSize - 2} className={isListening ? 'animate-bounce' : ''} />
             </button>
           )}
           {displayValue && (

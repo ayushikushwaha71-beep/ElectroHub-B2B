@@ -54,6 +54,8 @@ type VendorProfileList = { count: number; results: VendorProfile[] };
 const token = () =>
   typeof window === 'undefined' ? '' : localStorage.getItem('electrohub_access_token') ?? '';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+
 // ─── Vendor Guard ──────────────────────────────────────────────────────────────
 function Guard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -1731,7 +1733,7 @@ export function RealVendorPurchaseOrders() {
                             size="sm" 
                             variant="secondary" 
                             leftIcon={<FileText size={14} />}
-                            onClick={() => window.open(`/api/quotations/${qd.id}/invoice/pdf/?token=${token()}`, '_blank')}
+                            onClick={() => window.open(`${API_BASE}/quotations/${qd.id}/invoice/pdf/?token=${encodeURIComponent(token())}`, '_blank', 'noopener,noreferrer')}
                           >
                             {qd.invoice.is_proforma ? 'Download PI PDF' : 'Download Invoice PDF'}
                           </Button>
@@ -1789,6 +1791,7 @@ export function RealVendorPurchaseOrders() {
               <div>
                 <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Carrier / Courier</label>
                 <input
+                  id="shipment-carrier"
                   type="text"
                   value={shipmentForm.carrier}
                   onChange={e => setShipmentForm(f => ({ ...f, carrier: e.target.value }))}
@@ -1799,6 +1802,7 @@ export function RealVendorPurchaseOrders() {
               <div>
                 <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Tracking Number</label>
                 <input
+                  id="shipment-tracking"
                   type="text"
                   value={shipmentForm.tracking_number}
                   onChange={e => setShipmentForm(f => ({ ...f, tracking_number: e.target.value }))}

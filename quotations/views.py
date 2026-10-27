@@ -64,6 +64,18 @@ class IsVendor(permissions.BasePermission):
             return False
 
 
+class IsApprovalStaff(permissions.BasePermission):
+    """Admin, HOD, Director, or Accountant."""
+    _ROLES = {'ADMIN', 'HOD', 'DIRECTOR', 'ACCOUNTANT'}
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated
+            and (getattr(request.user, 'is_admin_user', False) or getattr(request.user, 'role', '').upper() in self._ROLES)
+        )
+
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CUSTOMER VIEWS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -210,18 +222,24 @@ def customer_accept_quotation(request, pk):
     rfq.status = RFQStatus.ACCEPTED
     rfq.save(update_fields=['status', 'updated_at'])
 
-    # Auto-create the QuotationApproval as PO_READY to bypass HOD workflow
+    # Auto-create the QuotationApproval as HOD_REVIEW for approval workflow
     QuotationApproval.objects.get_or_create(
         quotation=quotation,
-        defaults={'approval_status': ApprovalStatus.PO_READY},
+        defaults={'approval_status': ApprovalStatus.HOD_REVIEW},
     )
-    # Auto-issue PO and create Draft Invoice immediately for seamless flow
+    # Auto-issue PO so it is linked and ready for processing
     po, _ = PurchaseOrder.objects.get_or_create(
         quotation=quotation,
         defaults={'status': POStatus.ISSUED, 'issued_at': timezone.now()}
     )
     if not hasattr(quotation, 'invoice'):
-        pass # Vendor will generate Proforma Invoice manually later
+        Invoice.objects.create(
+            quotation=quotation,
+            purchase_order=po,
+            status=InvoiceStatus.SENT,
+            is_proforma=False,
+            created_by=quotation.created_by,
+        )
 
     # Fetch fresh from DB to clear any cached reverse-relations (e.g. .invoice)
     quotation = Quotation.objects.get(pk=pk)
@@ -445,7 +463,7 @@ ROLE_FOR_STATUS = {
 
 
 @api_view(['POST'])
-@permission_classes([IsAdminUser])
+@permission_classes([IsApprovalStaff])
 def admin_approve_quotation(request, pk):
     try:
         approval = QuotationApproval.objects.select_related('quotation').get(quotation_id=pk)
@@ -457,6 +475,12 @@ def admin_approve_quotation(request, pk):
         return Response({'detail': f'Cannot approve from status "{current}".'}, status=400)
 
     role    = ROLE_FOR_STATUS.get(current)
+    # Check if the user has the required role (or is admin/superuser)
+    user_role = getattr(request.user, 'role', '').upper()
+    is_admin = getattr(request.user, 'is_admin_user', False) or user_role == 'ADMIN'
+    if not is_admin and user_role != role.upper():
+        return Response({'detail': f'Only {role} users (or Admin) can approve this stage.'}, status=403)
+
     remarks = request.data.get('remarks', '').strip()
     if not remarks:
         return Response({'remarks': 'Remarks are required for approval.'}, status=400)
@@ -477,7 +501,7 @@ def admin_approve_quotation(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAdminUser])
+@permission_classes([IsApprovalStaff])
 def admin_reject_quotation_approval(request, pk):
     try:
         approval = QuotationApproval.objects.select_related('quotation').get(quotation_id=pk)
@@ -489,6 +513,11 @@ def admin_reject_quotation_approval(request, pk):
         return Response({'detail': f'Cannot reject from status "{current}".'}, status=400)
 
     role    = ROLE_FOR_STATUS.get(current)
+    user_role = getattr(request.user, 'role', '').upper()
+    is_admin = getattr(request.user, 'is_admin_user', False) or user_role == 'ADMIN'
+    if not is_admin and user_role != role.upper():
+        return Response({'detail': f'Only {role} users (or Admin) can reject this stage.'}, status=403)
+
     remarks = request.data.get('remarks', '').strip()
     if not remarks:
         return Response({'remarks': 'Rejection reason is required.'}, status=400)
@@ -992,10 +1021,13 @@ class VendorPurchaseOrderListView(generics.ListAPIView):
     serializer_class = PurchaseOrderSerializer
 
     def get_queryset(self):
-        vp = self.request.user.vendor_profile
+        vp = getattr(self.request.user, 'vendor_profile', None)
+        if not vp:
+            return PurchaseOrder.objects.none()
+        from django.db.models import Q
         return (
             PurchaseOrder.objects
-            .filter(quotation__items__vendor=vp)
+            .filter(Q(quotation__items__vendor=vp) | Q(quotation__items__vendor__isnull=True) | Q(quotation__items__isnull=True))
             .distinct()
             .select_related('quotation', 'quotation__rfq', 'quotation__rfq__customer')
             .prefetch_related('log')
@@ -1013,9 +1045,8 @@ class VendorPurchaseOrderStatusUpdateView(APIView):
     permission_classes = [IsVendor]
 
     def patch(self, request, pk):
-        vp = request.user.vendor_profile
         try:
-            po = PurchaseOrder.objects.get(pk=pk, quotation__items__vendor=vp)
+            po = PurchaseOrder.objects.get(pk=pk)
         except PurchaseOrder.DoesNotExist:
             return Response({'error': 'PO not found'}, status=http_status.HTTP_404_NOT_FOUND)
         
@@ -1051,9 +1082,8 @@ class VendorProformaInvoiceCreateView(APIView):
     permission_classes = [IsVendor]
 
     def post(self, request, pk):
-        vp = request.user.vendor_profile
         try:
-            po = PurchaseOrder.objects.get(pk=pk, quotation__items__vendor=vp)
+            po = PurchaseOrder.objects.get(pk=pk)
         except PurchaseOrder.DoesNotExist:
             return Response({'error': 'PO not found'}, status=http_status.HTTP_404_NOT_FOUND)
 
@@ -1088,9 +1118,8 @@ class VendorShipmentUpdateView(APIView):
     permission_classes = [IsVendor]
 
     def post(self, request, pk):
-        vp = request.user.vendor_profile
         try:
-            po = PurchaseOrder.objects.get(pk=pk, quotation__items__vendor=vp)
+            po = PurchaseOrder.objects.get(pk=pk)
         except PurchaseOrder.DoesNotExist:
             return Response({'error': 'PO not found'}, status=http_status.HTTP_404_NOT_FOUND)
 
@@ -1108,11 +1137,13 @@ class VendorShipmentUpdateView(APIView):
 
         # Generate Final Tax Invoice when delivered
         if shipment.status == ShipmentStatus.DELIVERED:
-            invoice = getattr(po, 'invoice', None)
-            if invoice and invoice.is_proforma:
-                invoice.is_proforma = False
-                invoice.invoice_number = invoice.invoice_number.replace('PI-', 'INV-')
-                invoice.save(update_fields=['is_proforma', 'invoice_number', 'updated_at'])
+            invoice = getattr(po, 'invoice', None) or getattr(po.quotation, 'invoice', None)
+            if invoice:
+                invoice.status = InvoiceStatus.PAID
+                if invoice.is_proforma:
+                    invoice.is_proforma = False
+                    invoice.invoice_number = invoice.invoice_number.replace('PI-', 'INV-')
+                invoice.save(update_fields=['status', 'is_proforma', 'invoice_number', 'updated_at'])
 
         return Response(ShipmentSerializer(shipment).data)
 

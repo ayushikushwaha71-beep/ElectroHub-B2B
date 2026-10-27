@@ -9,7 +9,7 @@ export interface AuthUser {
   name:      string;
   email:     string;
   createdAt: string;
-  role: 'customer' | 'vendor' | 'admin';
+  role: 'customer' | 'vendor' | 'admin' | 'hod' | 'director' | 'accountant';
 }
 
 export interface AuthError {
